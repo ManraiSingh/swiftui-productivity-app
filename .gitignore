@@ -1,0 +1,15 @@
+# Build output
+build/
+DerivedData/
+*.ipa
+*.xcarchive
+*.dSYM.zip
+*.dSYM
+
+# Xcode per-user files
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS
+.DS_Store
