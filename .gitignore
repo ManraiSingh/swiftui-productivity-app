@@ -13,3 +13,7 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# App Store materials and music samples (kept locally, like the screenshots)
+AppStore/
+Music previews/
