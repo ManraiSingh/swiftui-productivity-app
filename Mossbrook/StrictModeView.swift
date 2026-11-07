@@ -12,10 +12,13 @@ struct StrictModeView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let size = CGSize(width: geo.size.height, height: geo.size.width)
+            // The desk is a wide scene. A phone (or an upright iPad) shows it turned sideways;
+            // an iPad already held sideways shows it as it is.
+            let upright = geo.size.height > geo.size.width
+            let size = upright ? CGSize(width: geo.size.height, height: geo.size.width) : geo.size
             StrictDesk(music: music, awayNote: awayNote, exit: exit)
                 .frame(width: size.width, height: size.height)
-                .rotationEffect(.degrees(90))
+                .rotationEffect(.degrees(upright ? 90 : 0))
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
         }
         .ignoresSafeArea()
@@ -81,7 +84,13 @@ struct StrictDesk: View {
     var body: some View {
         GeometryReader { geo in
             let s = max(geo.size.width, 1) / 160
-            let rows = Int(max(geo.size.height, 1) / s) + 2
+            let allRows = Int(max(geo.size.height, 1) / s) + 2
+            // A phone shows about 75 rows. Squarer screens (iPad) get the scene centred, with more wall
+            // above and desk below, instead of one huge empty desk.
+            // Taller screens (iPad) keep the phone's layout at the bottom and get more wall above it.
+            let lift = max(0, allRows - 76)
+            let rows = allRows - lift
+            let oy = CGFloat(lift) * s
             TimelineView(.animation(minimumInterval: 1.0 / 12)) { timeline in
                 let now = timeline.date
                 let t = now.timeIntervalSinceReferenceDate
@@ -91,9 +100,12 @@ struct StrictDesk: View {
                 let drink = session.flatMap { Drink(rawValue: $0.drink) } ?? .espresso
 
                 ZStack(alignment: .topLeading) {
-                    Canvas { ctx, _ in
+                    Canvas { ctx, size in
+                        if lift > 0 {
+                            StrictRenderer.upperWall(Painter(ctx: ctx, s: s), t: t, height: lift + 1, phase: store.phase)
+                        }
                         StrictRenderer.draw(
-                            Painter(ctx: ctx, s: s), t: t, rows: rows, phase: store.phase,
+                            Painter(ctx: ctx, s: s).shifted(dy: lift), t: t, rows: rows, phase: store.phase,
                             remaining: remaining, fill: fill, drink: drink, headphones: music.isPlaying,
                             activity: activity
                         )
@@ -105,13 +117,13 @@ struct StrictDesk: View {
                         ActivityPicker(selection: $activityRaw, compact: true)
                             .fixedSize()
                             .frame(width: 60 * s, height: 60 * s, alignment: .bottomLeading)
-                            .position(x: 37 * s, y: 38.5 * s)
+                            .position(x: 37 * s, y: 38.5 * s + oy)
                             .transition(.opacity)
                     }
 
                     controls(session: session, s: s)
                         .frame(width: 56 * s, alignment: .leading)
-                        .position(x: 128 * s, y: 58 * s)
+                        .position(x: 128 * s, y: 58 * s + oy)
 
                     Text("STRICT MODE")
                         .font(.pixel(10, .heavy))
@@ -119,7 +131,7 @@ struct StrictDesk: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
                         .pixelBox(Theme.gold, shadow: 2)
-                        .position(x: 128 * s, y: 4.5 * s)
+                        .position(x: 128 * s, y: 4.5 * s + oy)
 
                     if let awayNote {
                         Text(awayNote)
@@ -127,7 +139,7 @@ struct StrictDesk: View {
                             .foregroundStyle(Theme.ink)
                             .padding(10)
                             .pixelBox(Theme.card)
-                            .position(x: 52 * s, y: 8 * s)
+                            .position(x: 52 * s, y: 8 * s + oy)
                             .transition(.opacity)
                     }
 
@@ -423,5 +435,52 @@ enum StrictRenderer {
                 p.rect(x + c * scale, y + r * scale, scale, scale, color)
             }
         }
+    }
+}
+
+
+extension StrictRenderer {
+    /// Extra wall above the desk on taller screens: a beam with lights, a shelf of plants and
+    /// books, and two little framed pictures, so the room fills the screen.
+    static func upperWall(_ p: Painter, t: Double, height: Int, phase: DayPhase) {
+        let wall = Color(hex: 0x4A2C1D), wallLight = Color(hex: 0x5C3A26)
+        let wood = Color(hex: 0xC07A40), woodDark = Color(hex: 0x8A5230)
+        p.rect(0, 0, 160, height, wall)
+        for x in stride(from: 0, to: 160, by: 10) { p.rect(x, 0, 1, height, wallLight) }
+        // Beam with fairy lights.
+        p.rect(0, 0, 160, 4, Color(hex: 0x3A2218))
+        p.rect(0, 4, 160, 1, ink)
+        let colors: [UInt32] = [0xFFD27A, 0xF49AC1, 0xA6E1F0, 0xFFE38A]
+        for (i, x) in stride(from: 4, to: 158, by: 8).enumerated() {
+            let y = 6 + (i % 2)
+            p.dot(x, y - 1, ink)
+            p.glow(Double(x) + 0.5, Double(y) + 1, radius: 3, Color(hex: colors[i % 4]), 0.5)
+            p.rect(x, y, 1, 2, Color(hex: colors[i % 4]))
+        }
+        guard height > 26 else { return }
+        let mid = min(height - 10, max(16, height / 2 + 2))
+        // Framed pictures: a little sunset and a little mountain.
+        let frames: [(Int, UInt32, UInt32)] = [(16, 0xF2A65A, 0x6E8B5E), (132, 0x8FB4E8, 0xE8E3D4)]
+        for (fx, sky, land) in frames {
+            VillageRenderer.box(p, fx, mid - 13, 14, 10, Color(hex: sky), outline: woodDark)
+            p.rect(fx, mid - 7, 14, 4, Color(hex: land))
+            p.rect(fx + 4, mid - 10, 3, 3, Color(hex: 0xFFF3C0))
+        }
+        // A long shelf with plants, books and a mug.
+        let sy = mid
+        p.rect(40, sy, 80, 2, wood)
+        p.rect(40, sy + 2, 80, 1, ink)
+        for x in [46, 112] { p.rect(x, sy + 3, 2, 3, woodDark) }
+        p.sprite(Sprites.pottedPlant, x: 44, y: sy - 11)
+        p.sprite(Sprites.pottedPlant, x: 104, y: sy - 11)
+        let books: [UInt32] = [0xC65F4A, 0x4A6FA5, 0xF2C14E, 0x6E8B5E, 0x8E5A8A]
+        for (i, c) in books.enumerated() {
+            let h = 7 + noise(i, 3) % 3
+            p.rect(62 + i * 3, sy - h, 2, h, Color(hex: c))
+        }
+        VillageRenderer.box(p, 84, sy - 6, 5, 6, Color(hex: 0xFFFDF6))
+        p.rect(85, sy - 5, 3, 2, Color(hex: 0x9CB86A))
+        VillageRenderer.box(p, 93, sy - 9, 6, 9, Color(hex: 0xE8A0B0))
+        if phase == .night { p.rect(0, 0, 160, height, Color(hex: 0x1A1033).opacity(0.15)) }
     }
 }

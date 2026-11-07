@@ -237,7 +237,11 @@ struct CafeFloor: View {
 
     var body: some View {
         GeometryReader { geo in
-            let s = max(geo.size.width, 1) / 128
+            // Phones fill the width. Bigger screens fit the whole room (about 252 rows tall) and
+            // centre it, with wood panelling either side, so the pixels stay a sensible size.
+            let wide = geo.size.width >= 600
+            let s = wide ? min(geo.size.width / 128, max(geo.size.height, 1) / 252) : max(geo.size.width, 1) / 128
+            let sceneW = 128 * s
             let rows = Int(max(geo.size.height, 1) / s) + 2
             TimelineView(.animation(minimumInterval: 1.0 / 20)) { timeline in
                 let now = timeline.date
@@ -252,6 +256,7 @@ struct CafeFloor: View {
 
                 ZStack(alignment: .topLeading) {
                     Canvas { ctx, _ in
+                        CafeRenderer.edgeShade = !wide
                         CafeRenderer.draw(
                             Painter(ctx: ctx, s: s), t: t, rows: rows, phase: store.phase, level: store.cafeLevel,
                             you: you, scene: scene, fill: fill, visitor: visitor, beaX: bea,
@@ -285,17 +290,17 @@ struct CafeFloor: View {
                         let chat = CafeRenderer.breakChat(tour)
                         SeatBubble(text: chat.you ?? (tour.walking ? "YOU · on a break" : "YOU"), highlight: true)
                             .fixedSize()
-                            .position(x: min(max(tour.point.x * s, 80), geo.size.width - 80), y: (tour.point.y - 21) * s)
+                            .position(x: min(max(tour.point.x * s, 80), sceneW - 80), y: (tour.point.y - 21) * s)
                             .allowsHitTesting(false)
                         if let reply = chat.them {
                             switch tour.talk {
                             case .bea:
-                                beaBubble(reply, bea: bea, s: s, width: geo.size.width)
+                                beaBubble(reply, bea: bea, s: s, width: sceneW)
                             case .seat(let id):
                                 if let friend = CafeLayout.seats.first(where: { $0.id == id }) {
                                     SpeechBubble(text: reply, size: 10)
                                         .fixedSize()
-                                        .position(x: min(max(Double(friend.x + 8) * s, 80), geo.size.width - 80), y: CGFloat(friend.top - 12) * s)
+                                        .position(x: min(max(Double(friend.x + 8) * s, 80), sceneW - 80), y: CGFloat(friend.top - 12) * s)
                                         .allowsHitTesting(false)
                                 }
                             case .none:
@@ -309,18 +314,35 @@ struct CafeFloor: View {
                             .allowsHitTesting(false)
                     }
 
-                    beaBubble(beaLine(t: t), bea: bea, s: s, width: geo.size.width)
+                    beaBubble(beaLine(t: t), bea: bea, s: s, width: sceneW)
                         .opacity(scene.mode == .seated ? 0 : 1)
                 }
+                .frame(width: sceneW, height: geo.size.height, alignment: .topLeading)
+                .clipped()
                 .contentShape(Rectangle())
                 .gesture(SpatialTapGesture().onEnded { value in
                     handleTap(CGPoint(x: value.location.x / s, y: value.location.y / s))
                 })
+                .frame(maxWidth: .infinity)
+                .background {
+                    if wide {
+                        // The room carries on to both edges, so there are no side bars.
+                        let margin = (geo.size.width - sceneW) / 2
+                        let extra = Int((margin / s).rounded(.up)) + 1
+                        Canvas { ctx, _ in
+                            var moved = ctx
+                            moved.translateBy(x: margin, y: 0)
+                            CafeRenderer.wings(Painter(ctx: moved, s: s), t: t, rows: rows, phase: store.phase, extra: extra)
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
             }
             .overlay(alignment: .bottom) {
                 CafeHUD(scene: scene, goOrder: goOrder, sitAnywhere: sitAnywhere, openStrict: openStrict)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 6)
+                    .frame(maxWidth: wide ? max(sceneW, 560) : .infinity)
             }
             .overlay(alignment: .topLeading) {
                 Text("CAFÉ · \(store.focusMinutes)/\(VillageStore.cafeGoal) MIN")

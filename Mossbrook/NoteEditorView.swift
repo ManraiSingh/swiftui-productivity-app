@@ -221,6 +221,12 @@ struct NoteEditorView: View {
         .preferredColorScheme(.light)
         .onChange(of: photo) { Task { await addPhoto() } }
         .onAppear { if sheets.isEmpty { sheets = page.sheets } }
+        .task {
+            // A brand-new blank note is ready to type a title into straight away.
+            guard page.isEmpty else { return }
+            try? await Task.sleep(for: .milliseconds(450))
+            titleFocused = true
+        }
         .onDisappear {
             saveTask?.cancel()
             store.savePage(composed)

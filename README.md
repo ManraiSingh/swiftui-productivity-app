@@ -33,6 +33,9 @@ Each habit grows into one of six plant species, through seven stages from seed t
 **Bakery and town hall**
 Every finished cup and delivered letter bakes a treat. Treats can be eaten on a break, gifted to a villager to raise their hearts, or spent three at a time to save a broken streak. The town hall shows the week as a stacked chart of letters, pages and habits, alongside totals and the best day.
 
+**iPad**
+On iPad the whole town fits the screen and stays centred when the iPad turns. The café and greenhouse fill the screen edge to edge, carrying their walls, floor, lights and counter on past the original room. Strict mode keeps the phone's layout along the bottom with more cosy wall above, and shows the desk as it is when the iPad is already held sideways. Shop cards open centred instead of stretching.
+
 **Guided tour**
 The first launch starts zoomed out over the whole town and glides in to each villager in turn. A circular spotlight and a card with a pointer explain each one. Villagers stand still during the tour so the spotlight never chases a moving target.
 
@@ -145,7 +148,7 @@ A debug-only self-test checks the iCloud merge, deletion tombstones, the natural
 ### Requirements
 
 - Xcode 26 or later
-- iOS 18 or later, iPhone
+- iOS 18 or later, iPhone and iPad
 
 ### Setup
 
@@ -161,7 +164,6 @@ A debug-only self-test checks the iCloud merge, deletion tombstones, the natural
 - An Apple Watch app for ticking letters, starting a café cup and watering habits from the wrist, with watch face complications
 - More strict mode activities, drawn to the same standard as reading
 - Workdoro Plus: an optional one-time purchase for café themes, town decorations, extra plant species and more music
-- iPad layout
 - Unit test coverage for the date parser, streaks and repeat rules, moving out of the debug self-test
 
 ---

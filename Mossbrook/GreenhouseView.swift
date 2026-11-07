@@ -36,6 +36,68 @@ enum GreenhouseRenderer {
         }
     }
 
+    /// The glasshouse carried on past its edges for wide screens: sky through the glass, frames,
+    /// hanging plants and lights, the brick wall and tiled floor, with pots along the walls.
+    static func wings(_ p: Painter, t: Double, rows: Int, phase: DayPhase, extra: Int) {
+        guard extra > 0 else { return }
+        let sky: UInt32
+        switch phase {
+        case .day: sky = 0xCDEBEF
+        case .dusk: sky = 0xF2C7A6
+        case .night: sky = 0x2B3166
+        }
+        let frame = Color(hex: 0x5E7A50)
+        let bulbs: [UInt32] = [0xFFD27A, 0xF49AC1, 0xFFE38A, 0xA6E1F0]
+        for (x0, x1) in [(-extra, 0), (W, W + extra)] {
+            let w = x1 - x0
+            p.rect(x0, 0, w, rows, Color(hex: sky))
+            if phase == .night {
+                for i in 0..<10 { p.dot(x0 + noise(i, x0 & 31) % max(w, 1), noise(i, 9) % 40, Color.white.opacity(0.8)) }
+            }
+            for x in stride(from: x0, to: x1, by: 3) {
+                let hgt = 6 + noise(x + 500, 4) % 6
+                p.rect(x, 92 - hgt, 3, hgt, Color(hex: phase == .night ? 0x2F4A35 : 0x8CC56C).opacity(0.75))
+            }
+            for x in stride(from: x0 - ((x0 % 20) + 20) % 20, through: x1, by: 20) { p.rect(x, 0, 2, 96, frame) }
+            for y in [24, 50] { p.rect(x0, y, w, 2, frame) }
+            for x in stride(from: x0 - ((x0 % 7) + 7) % 7 + 3, to: x1, by: 7) {
+                let i = (x + 700) / 7
+                let y = 26 + (i % 2)
+                p.dot(x, y - 1, ink)
+                p.glow(Double(x) + 0.5, Double(y) + 1, radius: 3.5, Color(hex: bulbs[i % 4]), phase == .day ? 0.3 : 0.7)
+                p.rect(x, y, 1, 2, Color(hex: bulbs[i % 4]))
+            }
+            p.rect(x0, 94, w, 1, ink)
+            for y in stride(from: 95, to: 112, by: 4) {
+                p.rect(x0, y, w, 4, Color(hex: 0xB86E4A))
+                p.rect(x0, y + 3, w, 1, Color(hex: 0x9A5A3A))
+                for x in stride(from: x0 - ((x0 % 10) + 10) % 10 + (y / 4 % 2) * 5, to: x1, by: 10) { p.rect(x, y, 1, 3, Color(hex: 0x9A5A3A)) }
+            }
+            p.rect(x0, 112, w, rows - 112, Color(hex: 0xD9C4A0))
+            p.rect(x0, 112, w, 1, ink)
+            var y = 112, step = 4, row = 0
+            while y < rows {
+                if row % 2 == 0 { p.rect(x0, y + 1, w, step - 1, Color(hex: 0xCDB690)) }
+                p.rect(x0, y + step, w, 1, Color(hex: 0xB8A07A))
+                y += step; step += 2; row += 1
+            }
+            // One hanging plant and one potted plant on the floor, centred so nothing is cut off.
+            guard w >= 16 else { continue }
+            let hx = (x0 + x1) / 2
+            p.rect(hx, 0, 1, 9, ink)
+            _ = PlantRenderer.pot(p, cx: hx, base: 16, w: 10, h: 7)
+            let g = PlantRenderer.greens(false)
+            for v in 0..<5 {
+                let a = .pi / 2 + (Double(v) - 2) * 0.35 + sin(t * 0.7 + Double(v + hx)) * 0.05
+                PlantRenderer.leaf(p, Double(hx) + Double(v - 2) * 1.5, 11, angle: a, length: 6 + Double(noise(hx, v) % 5), width: 1.8, shade: g, front: v % 2 == 0)
+            }
+            if w >= 24 {
+                let species: PlantSpecies = x0 < 0 ? .cactus : .lavender
+                PlantRenderer.draw(p, species: species, stage: 5, thirsty: false, x: hx, base: 150, t: t, seed: hx)
+            }
+        }
+    }
+
     static func draw(_ p: Painter, t: Double, rows: Int, phase: DayPhase, habits: [Habit], watering: (id: UUID, start: Date)?, now: Date) {
         let sky: UInt32
         switch phase {
@@ -190,7 +252,10 @@ struct GreenhouseView: View {
             Color(hex: 0x2F4A35).ignoresSafeArea()
             VStack(spacing: 0) {
                 GeometryReader { geo in
-                    let s = max(geo.size.width, 1) / CGFloat(GreenhouseRenderer.W)
+                    // Phones fill the width; bigger screens fit both tables (about 205 rows) and centre them.
+                    let wide = geo.size.width >= 600
+                    let fullW = CGFloat(GreenhouseRenderer.W)
+                    let s = wide ? min(geo.size.width / fullW, max(geo.size.height, 1) / 205) : max(geo.size.width, 1) / fullW
                     let rows = Int(max(geo.size.height, 1) / s) + 2
                     TimelineView(.animation(minimumInterval: 1.0 / 15)) { tl in
                         let t = tl.date.timeIntervalSinceReferenceDate
@@ -203,11 +268,29 @@ struct GreenhouseView: View {
                             }
                             slots(s: s)
                         }
+                        .frame(width: fullW * s, height: geo.size.height, alignment: .topLeading)
+                        .clipped()
+                        .frame(maxWidth: .infinity)
+                        .background {
+                            if wide {
+                                let margin = (geo.size.width - fullW * s) / 2
+                                let extra = Int((margin / s).rounded(.up)) + 1
+                                Canvas { ctx, _ in
+                                    var moved = ctx
+                                    moved.translateBy(x: margin, y: 0)
+                                    GreenhouseRenderer.wings(Painter(ctx: moved, s: s), t: t, rows: rows, phase: store.phase, extra: extra)
+                                }
+                                .allowsHitTesting(false)
+                            }
+                        }
                     }
                 }
                 .ignoresSafeArea(edges: .top)
 
                 bottomCard
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(hex: 0xD9C4A0).ignoresSafeArea(edges: .bottom))
             }
 
             Button {

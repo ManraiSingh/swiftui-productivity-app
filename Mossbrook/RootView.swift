@@ -148,8 +148,11 @@ struct RootView: View {
 
 
     /// The normal view: about 128 art pixels across the screen, snapped to whole screen pixels.
+    /// How big one art pixel is. A phone shows about half the town across; an iPad shows all of it,
+    /// so the pixels stay a comfortable size instead of growing with the bigger screen.
     private func defaultDots(_ width: CGFloat) -> CGFloat {
-        max(1, (width / 128 * displayScale).rounded(.down))
+        let columns: CGFloat = width < 600 ? 128 : min(CGFloat(VillageLayout.width + 24), width / 3.5)
+        return max(1, (width / columns * displayScale).rounded(.down))
     }
 
     /// Zoomed out as far as the whole town fits across the screen; zoomed in to about twice the normal size.
@@ -335,6 +338,7 @@ struct VillageDrawer: View {
                     .accessibilityLabel("Add a task or note")
                 }
                 .padding(.horizontal, 14)
+                .frame(maxWidth: 720)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -351,6 +355,8 @@ struct VillageDrawer: View {
             if expanded {
                 ScrollView {
                     DrawerDetails(open: open)
+                        .frame(maxWidth: 720)
+                        .frame(maxWidth: .infinity)
                 }
                 .scrollIndicators(.hidden)
                 .transition(.opacity)

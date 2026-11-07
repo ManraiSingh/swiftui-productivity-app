@@ -64,6 +64,7 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
 
     func updateUIView(_ scroll: WorldScrollView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.resize(to: contentSize)
         // Pass along new inputs (like pausing while a screen covers the town). Same view type, so its state is kept.
         context.coordinator.host?.rootView = content()
         apply(to: scroll)
@@ -89,6 +90,7 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
         var host: UIHostingController<Content>?
         var container: UIView?
         private(set) var placed = false
+        private var lastBounds: CGSize = .zero
         private var lastReport: (CGFloat, CGPoint) = (-1, CGPoint(x: -1, y: -1))
         private var lastFocus: CGPoint?
         private var appliedInitialFocus = false
@@ -181,8 +183,42 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { container }
 
+        /// The world got a new size (an iPad turned, or a window resized): resize it in place,
+        /// keeping the same spot in the middle of the screen.
+        func resize(to size: CGSize) {
+            guard let scroll, let container, container.bounds.size != size, size.width > 0 else { return }
+            let z = scroll.zoomScale
+            let old = container.bounds.size
+            let mid = CGPoint(x: (scroll.contentOffset.x + scroll.bounds.width / 2) / max(old.width * z, 1),
+                              y: (scroll.contentOffset.y + scroll.bounds.height / 2) / max(old.height * z, 1))
+            container.bounds = CGRect(origin: .zero, size: size)
+            container.center = CGPoint(x: size.width * z / 2, y: size.height * z / 2)
+            scroll.contentSize = CGSize(width: size.width * z, height: size.height * z)
+            refreshVisible()
+            keepInside(scroll)
+            recentre(scroll, on: mid)
+        }
+
+        private func recentre(_ scroll: UIScrollView, on mid: CGPoint) {
+            let cs = scroll.contentSize, b = scroll.bounds.size, inset = scroll.contentInset
+            let x = min(max(mid.x * cs.width - b.width / 2, -inset.left), max(cs.width - b.width + inset.right, -inset.left))
+            let y = min(max(mid.y * cs.height - b.height / 2, -inset.top), max(cs.height - b.height + inset.bottom, -inset.top))
+            scroll.contentOffset = CGPoint(x: x, y: y)
+        }
+
         func didLayout() {
             guard let scroll, scroll.bounds.width > 0 else { return }
+            if placed && lastBounds != .zero && lastBounds != scroll.bounds.size, let c = container {
+                // The screen itself changed shape: keep looking at the same part of town.
+                let cs = scroll.contentSize
+                let mid = CGPoint(x: (scroll.contentOffset.x + lastBounds.width / 2) / max(cs.width, 1),
+                                  y: (scroll.contentOffset.y + lastBounds.height / 2) / max(cs.height, 1))
+                _ = c
+                lastBounds = scroll.bounds.size
+                keepInside(scroll)
+                recentre(scroll, on: mid)
+            }
+            lastBounds = scroll.bounds.size
             keepInside(scroll)
             refreshVisible()
             if !placed {

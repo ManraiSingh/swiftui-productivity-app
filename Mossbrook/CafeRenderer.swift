@@ -169,8 +169,103 @@ enum CafeRenderer {
         if phase == .night { p.rect(0, 0, 128, rows, Color(hex: 0x1A1033).opacity(0.2)) }
         if phase == .dusk { p.rect(0, 0, 128, rows, Color(hex: 0xFF8A40).opacity(0.05)) }
         stringLights(p, t: t, phase: phase)
-        p.rect(0, 0, 2, rows, Color.black.opacity(0.15))
-        p.rect(126, 0, 2, rows, Color.black.opacity(0.15))
+        if edgeShade {
+            p.rect(0, 0, 2, rows, Color.black.opacity(0.15))
+            p.rect(126, 0, 2, rows, Color.black.opacity(0.15))
+        }
+    }
+
+    /// False on wide screens, where the room carries on past its edges instead of ending in a shadow.
+    static var edgeShade = true
+
+    /// The café carried on past its left and right edges, for screens wider than the room:
+    /// the same wall, beam, lights and floor, the counter running on, and some shelves and plants.
+    static func wings(_ p: Painter, t: Double, rows: Int, phase: DayPhase, extra: Int) {
+        guard extra > 0 else { return }
+        for (x0, x1) in [(-extra, 0), (128, 128 + extra)] {
+            let w = x1 - x0
+            p.rect(x0, 0, w, 82, wall)
+            for x in stride(from: x0 - ((x0 % 12) + 12) % 12, to: x1, by: 12) {
+                p.rect(x, 10, 1, 72, wallDark)
+                p.rect(x + 1, 10, 1, 72, wallLight)
+            }
+            p.rect(x0, 0, w, 9, beam)
+            p.rect(x0, 9, w, 1, ink)
+            p.rect(x0, 80, w, rows - 80, floor)
+            p.rect(x0, 80, w, 1, ink)
+            for y in stride(from: 86, to: rows, by: 6) {
+                p.rect(x0, y, w, 1, floorLine)
+                let start = x0 - ((x0 % 32) + 32) % 32 + (y / 6 % 2) * 16
+                for x in stride(from: start, to: x1, by: 32) { p.rect(x, y - 5, 1, 5, floorLine) }
+            }
+            // Lights along the beam.
+            let colors: [UInt32] = [0xFFD27A, 0xF49AC1, 0xA6E1F0, 0xFFE38A]
+            for x in stride(from: x0 + 2, to: x1, by: 6) {
+                let i = (x + 1024) / 6
+                let y = 10 + (i % 2)
+                let c = Color(hex: colors[i % colors.count])
+                p.dot(x, y, ink)
+                let twinkle = (Int(t * 2) + i) % 7 == 0 ? 0.35 : 0.6
+                p.glow(Double(x) + 0.5, Double(y) + 1.5, radius: 3, c, phase == .day ? twinkle * 0.6 : twinkle)
+                p.rect(x, y + 1, 1, 2, c)
+            }
+        }
+        // Left: one wide bookcase against the wall beside the window, and a plant on the floor.
+        let left = -extra
+        if extra >= 10 {
+            let bx0 = max(left + 3, -40), bx1 = -3
+            let top = 22, bottom = 80
+            p.rect(bx0 - 1, top - 1, bx1 - bx0 + 2, bottom - top + 2, ink)
+            p.rect(bx0, top, bx1 - bx0, bottom - top, woodDark)
+            let colors: [UInt32] = [0xC65F4A, 0x4A6FA5, 0xF2C14E, 0x6E8B5E, 0x8E5A8A, 0xE8A0B0, 0xD9824A]
+            for shelf in stride(from: top + 2, to: bottom - 6, by: 12) {
+                var x = bx0 + 1
+                var i = shelf
+                while x < bx1 - 2 {
+                    let w = 2 + noise(i, 1) % 2
+                    let h = 7 + noise(i, 2) % 3
+                    p.rect(x, shelf + 10 - h, w, h, Color(hex: colors[i % colors.count]))
+                    x += w + (noise(i, 5) % 5 == 0 ? 2 : 1)
+                    i += 1
+                }
+                p.rect(bx0, shelf + 10, bx1 - bx0, 2, wood)
+            }
+            p.rect(bx0, bottom - 2, bx1 - bx0, 2, wood)
+            plant(p, x: (bx0 + bx1) / 2 - 2, y: 150)
+        }
+        // Right: the counter runs on to the wall, with shelves of jars above it.
+        let r0 = 128, r1 = 128 + extra
+        p.rect(r0, 62, extra, 4, ink)
+        p.rect(r0, 62, extra, 3, wood)
+        p.rect(r0, 62, extra, 1, woodLight)
+        p.rect(r0, 65, extra, 16, ink)
+        p.rect(r0, 66, extra, 14, green)
+        for x in stride(from: 129, to: r1, by: 5) {
+            p.rect(x, 67, 1, 13, greenDark)
+            p.rect(x + 1, 67, 1, 13, greenLight)
+        }
+        let jars: [UInt32] = [0xC69C6D, 0xE8A0B0, 0xF2C14E, 0x9CB86A, 0x6B4226]
+        for y in [28, 44] {
+            p.rect(r0 + 4, y + 6, max(0, extra - 8), 2, woodDark)
+            p.rect(r0 + 4, y + 8, max(0, extra - 8), 1, ink)
+            for (i, jx) in stride(from: r0 + 7, to: r1 - 8, by: 7).enumerated() {
+                VillageRenderer.box(p, jx, y, 4, 6, Color(hex: 0xF4E3C4))
+                p.rect(jx, y + 2, 4, 4, Color(hex: jars[(i + y) % jars.count]))
+            }
+        }
+        if extra >= 12 { plant(p, x: 128 + extra / 2 - 3, y: 130) }
+        // The doorway in the corner carries on into the wall.
+        p.rect(128, 196, 8, 24, ink)
+        p.rect(128, 197, 7, 22, phase == .night ? Color(hex: 0x2F3563) : Color(hex: 0xFBE3A8))
+        p.rect(126, 218, 10, 3, Color(hex: 0x6E8B5E))
+        if phase == .night {
+            p.rect(-extra, 0, extra, rows, Color(hex: 0x1A1033).opacity(0.2))
+            p.rect(128, 0, extra, rows, Color(hex: 0x1A1033).opacity(0.2))
+        }
+        if phase == .dusk {
+            p.rect(-extra, 0, extra, rows, Color(hex: 0xFF8A40).opacity(0.05))
+            p.rect(128, 0, extra, rows, Color(hex: 0xFF8A40).opacity(0.05))
+        }
     }
 
     // MARK: Room
@@ -244,7 +339,8 @@ enum CafeRenderer {
         p.rect(112, 218, 14, 3, Color(hex: 0x6E8B5E))
         p.glow(122, 208, radius: 14, Color(hex: 0xFFE2A0), phase == .night ? 0.1 : 0.3)
 
-        bookshelf(p, x: 0, top: 96, h: 104)
+        // On wide screens the room carries on to the left, so the narrow end shelf becomes a wall bookcase instead.
+        if edgeShade { bookshelf(p, x: 0, top: 96, h: 104) }
         plant(p, x: 0, y: 84)
         queueRope(p)
         lounge(p, t: t)
