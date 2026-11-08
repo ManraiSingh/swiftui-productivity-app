@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var showLetter = false
     @State private var showTownHall = false
     @State private var showGreenhouse = false
+    @State private var showStudyHall = false
     @Environment(\.displayScale) private var displayScale
     /// Current zoom (1 = the normal view) and where the world's top edge is on screen, for the sky behind.
     @State private var zoom: CGFloat = 1
@@ -20,7 +21,7 @@ struct RootView: View {
     @State private var tourIntro = true
 
     /// A full screen or a tall sheet is over the town, so there's no need to keep animating it.
-    private var townCovered: Bool { showCafe || showGreenhouse || openVillager != nil || showTownHall }
+    private var townCovered: Bool { showCafe || showGreenhouse || showStudyHall || openVillager != nil || showTownHall }
 
     var body: some View {
         GeometryReader { geo in
@@ -48,6 +49,7 @@ struct RootView: View {
                         onTapCafe: { showCafe = true },
                         onMailbox: { showLetter = true },
                         onTownHall: { showTownHall = true },
+                        onStudyHall: { showStudyHall = true },
                         paused: townCovered
                     )
                     .environment(store)
@@ -120,6 +122,9 @@ struct RootView: View {
         }
         .fullScreenCover(isPresented: $showGreenhouse) {
             GreenhouseView()
+        }
+        .fullScreenCover(isPresented: $showStudyHall) {
+            StudyHallView()
         }
         .onAppear {
             store.applyWidgetDeliveries()

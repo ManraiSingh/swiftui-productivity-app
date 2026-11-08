@@ -131,7 +131,7 @@ extension VillageRenderer {
         townHall(p, t: t)
         noticeBoard(at(p, (66, -200)), t: t)
         cottage(at(p, (120, -292)), t: t)
-        cottage(at(p, (84, -208)), t: t)
+        studyHall(p, t: t, state: state)
         for (x, y) in [(20, 166), (40, 176), (176, 166), (214, 174), (232, 162)] { flowerBed(p, x: x, y: y) }
     }
 
@@ -401,7 +401,7 @@ extension VillageRenderer {
         p.glow(Double(greenhouseCenter.x), Double(greenhouseCenter.base) - 10, radius: 16, Color(hex: 0xC8F0C0), 0.35 * strength)
         p.glow(Double(townHallCenter.x), Double(townHallCenter.base) - 6, radius: 12, warm, 0.4 * strength)
         p.glow(220, 134, radius: 6, warm, 0.5 * strength)
-        p.glow(184, 218, radius: 6, warm, 0.5 * strength)
+        studyHallLights(p, strength: strength)
         // Lanterns by the bakery, town hall and greenhouse doors.
         porchLantern(p, x: bakeryCenter.x + 5, y: bakeryCenter.base - 10, t: 0, strength: strength)
         porchLantern(p, x: townHallCenter.x + 6, y: townHallCenter.base - 13, t: 0, strength: strength)

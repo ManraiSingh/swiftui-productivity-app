@@ -7,6 +7,7 @@ struct VillageSceneView: View {
     var onTapCafe: () -> Void
     var onMailbox: () -> Void
     var onTownHall: () -> Void
+    var onStudyHall: () -> Void = {}
     /// True while another screen covers the town, so it stops animating where nobody can see it.
     var paused = false
     @State private var effects: [VillageEffect] = []
@@ -63,6 +64,7 @@ struct VillageSceneView: View {
                     hotspot(x: 30, y: 210, w: 36, h: 32, s: s, label: "Go to Juniper's greenhouse") { onTap(.juniper) }
                     hotspot(x: 180, y: 124, w: 34, h: 32, s: s, label: "Go to Rosie's bakery") { onTap(.rosie) }
                     hotspot(x: 128, y: 122, w: 44, h: 36, s: s, label: "Go to the town hall", action: onTownHall)
+                    hotspot(x: 196, y: 210, w: 40, h: 34, s: s, label: "Go to the Together House", action: onStudyHall)
                     hotspot(x: 161, y: 185, w: 16, h: 18, s: s, label: "Read the notice board", action: onTownHall)
 
                     ForEach(VillagerID.allCases) { villager in
@@ -149,7 +151,8 @@ struct TownSign: Identifiable {
         TownSign(id: "hall", title: "TOWN HALL", detail: "Your week", symbol: "chart.bar.fill", x: 128, y: 112),
         TownSign(id: "bakery", title: "BAKERY", detail: "Treats & rewards", symbol: "birthday.cake.fill", x: 180, y: 110),
         TownSign(id: "greenhouse", title: "GREENHOUSE", detail: "Daily habits", symbol: "leaf.fill", x: 30, y: 191),
-        TownSign(id: "cafe", title: "CAFÉ", detail: "Focus sessions", symbol: "cup.and.saucer.fill", x: 80, y: 193)
+        TownSign(id: "cafe", title: "CAFÉ", detail: "Focus sessions", symbol: "cup.and.saucer.fill", x: 80, y: 193),
+        TownSign(id: "together", title: "TOGETHER HOUSE", detail: "Hang out with the world", symbol: "globe.europe.africa.fill", x: 196, y: 181)
     ]
 }
 

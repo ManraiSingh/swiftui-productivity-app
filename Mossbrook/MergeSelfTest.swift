@@ -71,6 +71,16 @@ enum MergeSelfTest {
             ("weekly keeps the time", cal.component(.hour, from: RepeatRule.weekly.next(from: fri)) == 17)
         ]
         for (name, ok) in rchecks { NSLog("MERGETEST %@ %@", ok ? "PASS" : "FAIL", name) }
+
+        // Study hall names.
+        let nchecks: [(String, Bool)] = [
+            ("ordinary names pass", ["Manrai", "Aiko", "Tomás", "Kshitij", "Dickens", "Nazira", "Mei Ling"].allSatisfy { NameRules.problem($0) == nil }),
+            ("rude names blocked", ["fuck", "F u c k", "sh1t head", "b1tch", "nazi"].allSatisfy { NameRules.problem($0) != nil }),
+            ("reserved names blocked", NameRules.problem("Workdoro Admin") != nil),
+            ("names are trimmed and capped", NameRules.clean("  Ana   <b>Lee</b>!!  ") == "Ana bLeeb" && NameRules.clean(String(repeating: "a", count: 40)).count == 16),
+            ("one letter is too short", NameRules.problem("A") != nil)
+        ]
+        for (name, ok) in nchecks { NSLog("MERGETEST %@ %@", ok ? "PASS" : "FAIL", name) }
     }
 }
 #endif

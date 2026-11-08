@@ -2,7 +2,7 @@
 
 A SwiftUI productivity app set in a sleepy pixel-art town that wakes up as you get things done.
 
-Every building is a tool, and every tool has a villager who runs it. Tasks become letters for Pip the postman, notes become pages of Mo's book, focus time is spent at Bea's café, and habits grow into plants in Juniper's greenhouse. Finishing things fixes Pip's bike, fills Mo's book, brings regulars into the café and makes the garden bloom. There are no accounts and no servers: everything stays on the phone and in the user's own iCloud.
+Every building is a tool, and every tool has a villager who runs it. Tasks become letters for Pip the postman, notes become pages of Mo's book, focus time is spent at Bea's café, and habits grow into plants in Juniper's greenhouse. Finishing things fixes Pip's bike, fills Mo's book, brings regulars into the café and makes the garden bloom. There are no accounts and no servers: everything stays on the phone and in the user's own iCloud. The one shared place is the Together House, a cozy café-workroom where real people from anywhere walk around, snack, work and send each other emotes.
 
 Coming soon to the App Store.
 
@@ -29,6 +29,13 @@ The screen turns sideways into a quiet desk scene: a rainy window, a bookshelf, 
 
 **Greenhouse (habits)**
 Each habit grows into one of six plant species, through seven stages from seed to flourishing. Missing a day never undoes growth. A habit can be watered by hand or automatically when a café cup is finished, a page is written or a letter is delivered. Each plant has a history with current and best streaks, total days, this month's percentage and a Monday-first calendar where a forgotten past day can be filled in.
+
+**Together House (hang out with the world)**
+A cosy café-workroom on the south lane, shared with real people who have the app open right now. It has flowered wallpaper over sage wainscoting, sunlight falling across the floor from the window, fairy lights that glow at night, a crackling fireplace, a window that follows the real sky and weather, and Rosie behind a mint snack counter calling out *"Fresh cookies!"*. Work tables have laptops and books, little café tables are for snacks, and a rug of beanbags has the house cat asleep under the coffee table.
+
+You come in with a name and a character, then tap the floor to walk or tap a seat to sit. **Work** finds a desk and offers a 25 or 50 minute focus. **Eat** opens Rosie's menu (cookie, croissant, berry cake, ramen, cocoa or boba tea, all drawn in pixels). You walk up to the counter, Rosie bustles about making it, and then you carry it on a tray to a free café table and eat it bite by bit until only crumbs are left. **Relax** takes a beanbag. **Emote** pops a pixel bubble over your head with a little hop. There are 12: love, happy, haha, adore, hi, nice, party, sleepy, coffee, star, sad and music. Love sends floating hearts and party throws confetti, and **Say** shows a one-tap line like *"Good luck!"* or *"So cozy here"*. Tapping someone lets you wave, cheer them on, hide them or report their name. Tapping the cat gets a heart.
+
+There's no free text, so there's nothing to moderate except names. Each phone keeps one small record in the app's public CloudKit database: name, look, position, seat, snack, last emote and last line, by number. It reads everyone else's every 3 seconds. Other people walk smoothly between updates along the room's lanes and middle aisle, so movement looks live, and each bubble shows for the same few seconds on every phone. While you focus, you stay in your seat until the block ends, even with the phone locked. Names go through a filter that handles look-alike characters and checks whole words, and a name reported by two different people is hidden for everyone. The room is 128 pixels wide; wider screens get more wall, floor, shelves and plants. Setup and moderation steps are in [`CloudKit/README.md`](CloudKit/README.md).
 
 **Bakery and town hall**
 Every finished cup and delivered letter bakes a treat. Treats can be eaten on a break, gifted to a villager to raise their hearts, or spent three at a time to save a broken streak. The town hall shows the week as a stacked chart of letters, pages and habits, alongside totals and the best day.
@@ -65,6 +72,7 @@ The town and sky pause their timelines whenever the café, greenhouse or a shop 
 | State | Observation (`@Observable`) with one `VillageStore` |
 | Persistence | JSON in the app's Documents folder, written atomically, with a verified backup |
 | Sync | iCloud Drive ubiquity container, `NSMetadataQuery`, `NSFileCoordinator` |
+| Together House | CloudKit public database, async `records(matching:)` and `modifyRecords` |
 | Drawing | PencilKit |
 | Audio | `AVAudioEngine` with an `AVAudioSourceNode` synthesiser |
 | Widgets | WidgetKit, App Intents, App Groups |
@@ -84,6 +92,7 @@ Views (SwiftUI)
 VillageStore                letters, pages, habits, focus, story, streaks, saving
    |
    +- CloudSync              iCloud Drive mirror and item-by-item merge
+   +- HallService            Together House presence in the public CloudKit database
    +- LiveFocus              Live Activity and widget snapshot
    +- QuietNotifications     keeps alarms silent during strict mode
    +- LofiPlayer             real-time lo-fi synthesiser
@@ -95,6 +104,7 @@ Renderers (pure drawing, no state)
    +- TownRenderer           square, market, farm
    +- CafeRenderer           café floor, regulars, seats
    +- StrictRenderer         the sideways desk
+   +- TogetherRenderer       the Together House: counter, fireplace, tables, rug, emotes
    +- PlantRenderer          six species through seven stages
 ```
 
@@ -124,6 +134,7 @@ mossbrook.json
 ├─ MossbrookWidgets/    Widget extension and Live Activity
 ├─ Shared/              Pixel art, theme, plants, widget views and snapshot,
 │                       the deliver-letter App Intent
+├─ CloudKit/            Public database schema and Together House setup notes
 └─ docs/                Privacy policy, support and terms pages
 ```
 
@@ -133,13 +144,13 @@ The folders and targets keep the working title *Mossbrook*. Everything a user se
 
 ## Privacy
 
-Workdoro makes no network requests of its own. There is no account, no analytics, no ads and no tracking, and the privacy manifests declare that no data is collected. The only data that leaves the phone goes to the user's own iCloud Drive, which Apple does not count as collection.
+Workdoro has no account, no analytics, no ads and no tracking. Tasks, notes, habits and focus history only ever go to the user's own iCloud Drive. The Together House is the one exception, and it's opt-in: it shares a chosen name, a character, where you are in the room, emotes and one-tap lines from a fixed list, and a focus status, through the app's public CloudKit database. The privacy manifest declares this as Other User Content, not linked to the user and not used for tracking. Delete all data also removes you from the house.
 
 The save file is never overwritten when it can't be read. A copy that loaded correctly is kept as a backup on every launch. If the main file is ever damaged, it is set aside and the town is restored from that backup. Delete all data removes the save file, the backups, photos in notes, the iCloud copy and every pending notification.
 
 ### Testing
 
-A debug-only self-test checks the iCloud merge, deletion tombstones, the natural-language repeat parser and multi-page notes. Launch the app with `-mergeSelfTest` and filter the console for `MERGETEST`. All 18 checks should pass.
+A debug-only self-test checks the iCloud merge, deletion tombstones, the natural-language repeat parser and multi-page notes and the Together House name filter. Launch the app with `-mergeSelfTest` and filter the console for `MERGETEST`. All 23 checks should pass. Launching with `-hallDemo` fills the Together House with sample visitors who wander, snack, emote and chat, with no network calls. It's useful for screenshots.
 
 ---
 

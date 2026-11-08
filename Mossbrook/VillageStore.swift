@@ -709,6 +709,8 @@ final class VillageStore {
         for key in ["tourDone", "phaseOverride", "habitReminder", "strictIntroSeen", "strictTipSeen", StrictActivity.storageKey] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        // Leave the Together House and forget your name there.
+        Task { @MainActor in HallService.shared.forget() }
         // The backup and any put-aside copies go too, so "delete all" really means all.
         let docs = fileURL.deletingLastPathComponent()
         if let files = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil) {
