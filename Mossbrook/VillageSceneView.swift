@@ -21,35 +21,26 @@ struct VillageSceneView: View {
                 let state = SceneState(store)
                 let live = effects.filter { t - $0.start < 3.2 }
                 ZStack(alignment: .topLeading) {
-                ZStack(alignment: .topLeading) {
-                    if let woods = WildsCache.shared.image(for: state) {
-                        Image(decorative: woods, scale: 1)
-                            .resizable()
-                            .interpolation(.none)
-                    }
-                    if state.phase == .night {
-                        Canvas { ctx, _ in
-                            VillageRenderer.wildsLive(Painter(ctx: ctx, s: s), t: t, state: state)
-                        }
+                // The whole world, woods and town, drawn into one small bitmap each frame and shown
+                // as a single picture: far lighter for the phone than thousands of separate shapes.
+                let woods = WildsCache.shared.image(for: state)
+                let base = TownBaseCache.shared.image(for: state)
+                PixelCanvas(cols: VillageLayout.worldWidth, rows: VillageLayout.worldHeight, s: s, k: 2, frame: t) { p in
+                    if let woods { p.picture(woods, x: 0, y: 0, w: VillageLayout.worldWidth, h: VillageLayout.worldHeight) }
+                    if state.phase == .night { VillageRenderer.wildsLive(p, t: t, state: state) }
+                    let m = VillageLayout.margin, top = VillageLayout.topMargin
+                    p.clipped(x: m, y: top, w: VillageLayout.width, h: VillageLayout.height) { p in
+                        let town = p.shifted(dx: m, dy: top)
+                        VillageRenderer.drawSky(town, t: t, state: state, effects: live)
+                        if let base { town.picture(base, x: 0, y: 0, w: VillageLayout.width, h: VillageLayout.height) }
+                        VillageRenderer.drawLive(town, t: t, state: state, effects: live)
                     }
                 }
                 .frame(width: geo.size.width, height: CGFloat(VillageLayout.worldHeight) * s)
                 .allowsHitTesting(false)
 
                 ZStack(alignment: .topLeading) {
-                    ZStack(alignment: .topLeading) {
-                        Canvas { ctx, _ in
-                            VillageRenderer.drawSky(Painter(ctx: ctx, s: s), t: t, state: state, effects: live)
-                        }
-                        if let base = TownBaseCache.shared.image(for: state) {
-                            Image(decorative: base, scale: 1)
-                                .resizable()
-                                .interpolation(.none)
-                        }
-                        Canvas { ctx, _ in
-                            VillageRenderer.drawLive(Painter(ctx: ctx, s: s), t: t, state: state, effects: live)
-                        }
-                    }
+                    Color.clear
                     .frame(width: townW, height: CGFloat(VillageLayout.height) * s)
                     .contentShape(Rectangle())
                     .gesture(SpatialTapGesture().onEnded { value in
@@ -60,16 +51,19 @@ struct VillageSceneView: View {
                     hotspot(x: 34, y: 124, w: 38, h: 32, s: s, label: "Go to Mo's library") { onTap(.mo) }
                     hotspot(x: 82, y: 124, w: 36, h: 32, s: s, label: "Go to Pip's post office") { onTap(.pip) }
                     hotspot(x: 80, y: 210, w: 40, h: 30, s: s, label: "Go to Bea's café", action: onTapCafe)
-                    hotspot(x: 65, y: 134, w: 12, h: 14, s: s, label: store.hasDailyLetter ? "Open today's letter" : "Read today's letter again", action: onMailbox)
+                    hotspot(x: 65, y: 134, w: 12, h: 14, s: s, label: store.hasDailyLetter ? "Open today's letter" : "Read today's letter again", sound: .page, action: onMailbox)
                     hotspot(x: 30, y: 210, w: 36, h: 32, s: s, label: "Go to Juniper's greenhouse") { onTap(.juniper) }
                     hotspot(x: 180, y: 124, w: 34, h: 32, s: s, label: "Go to Rosie's bakery") { onTap(.rosie) }
-                    hotspot(x: 128, y: 122, w: 44, h: 36, s: s, label: "Go to the town hall", action: onTownHall)
+                    hotspot(x: 128, y: 104, w: 60, h: 70, s: s, label: "Visit the Old Oak for a town meeting", action: onTownHall)
                     hotspot(x: 196, y: 210, w: 40, h: 34, s: s, label: "Go to the Together House", action: onStudyHall)
-                    hotspot(x: 161, y: 185, w: 16, h: 18, s: s, label: "Read the notice board", action: onTownHall)
+                    hotspot(x: 161, y: 185, w: 16, h: 18, s: s, label: "Read the notice board: town meeting", action: onTownHall)
 
                     ForEach(VillagerID.allCases) { villager in
                         let pose = VillageLayout.pose(villager, t: t, state: state)
-                        hotspot(x: pose.x, y: pose.y - 8, w: 20, h: 22, s: s, label: "Talk to \(villager.name)") { onTap(villager) }
+                        hotspot(x: pose.x, y: pose.y - 8, w: 20, h: 22, s: s, label: "Talk to \(villager.name)", sound: nil) {
+                            if villager == .pip && store.bikeFixed { SoundFX.shared.play(.bikeBell) } else { SoundFX.shared.voice(of: villager) }
+                            onTap(villager)
+                        }
                     }
 
                     ForEach(live) { effect in
@@ -102,8 +96,11 @@ if !state.touring {
         .sensoryFeedback(.selection, trigger: effects.count)
     }
 
-    private func hotspot(x: Double, y: Double, w: Double, h: Double, s: CGFloat, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func hotspot(x: Double, y: Double, w: Double, h: Double, s: CGFloat, label: String, sound: SoundFX.Sound? = .open, action: @escaping () -> Void) -> some View {
+        Button {
+            if let sound { SoundFX.shared.play(sound) }
+            action()
+        } label: {
             Color.clear
                 .frame(width: w * s, height: h * s)
                 .contentShape(Rectangle())
@@ -119,19 +116,19 @@ if !state.touring {
         for i in 0..<2 {
             let d = VillageRenderer.duckPosition(i, t: now)
             if hypot(d.x - g.x, d.y - g.y) < 7 {
-                effects.append(VillageEffect(kind: .quack(duck: i), start: now))
+                effects.append(VillageEffect(kind: .quack(duck: i), start: now)); SoundFX.shared.play(.quack)
                 return
             }
         }
         for (i, spot) in VillageRenderer.treeSpots.enumerated() {
             let rect = CGRect(x: Double(spot.0 - 1), y: Double(spot.1 - 1), width: 12, height: 15)
             if rect.contains(g) {
-                effects.append(VillageEffect(kind: .shake(tree: i), start: now))
+                effects.append(VillageEffect(kind: .shake(tree: i), start: now)); SoundFX.shared.play(.apple)
                 return
             }
         }
         if g.y < 44 && phase == .night {
-            effects.append(VillageEffect(kind: .star(x: g.x + 10, y: g.y - 4), start: now))
+            effects.append(VillageEffect(kind: .star(x: g.x + 10, y: g.y - 4), start: now)); SoundFX.shared.play(.star)
         }
     }
 }
@@ -148,7 +145,7 @@ struct TownSign: Identifiable {
     static let all: [TownSign] = [
         TownSign(id: "library", title: "LIBRARY", detail: "Notes & pages", symbol: "book.fill", x: 34, y: 106),
         TownSign(id: "post", title: "POST OFFICE", detail: "Tasks & reminders", symbol: "envelope.fill", x: 82, y: 109),
-        TownSign(id: "hall", title: "TOWN HALL", detail: "Your week", symbol: "chart.bar.fill", x: 128, y: 112),
+        TownSign(id: "oak", title: "OLD OAK", detail: "Town meeting", symbol: "tree.fill", x: 128, y: 112),
         TownSign(id: "bakery", title: "BAKERY", detail: "Treats & rewards", symbol: "birthday.cake.fill", x: 180, y: 110),
         TownSign(id: "greenhouse", title: "GREENHOUSE", detail: "Daily habits", symbol: "leaf.fill", x: 30, y: 191),
         TownSign(id: "cafe", title: "CAFÉ", detail: "Focus sessions", symbol: "cup.and.saucer.fill", x: 80, y: 193),

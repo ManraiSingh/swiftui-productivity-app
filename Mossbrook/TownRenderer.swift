@@ -1,11 +1,10 @@
 import SwiftUI
 
 /// The lower town: the square and fountain, Juniper's greenhouse, Rosie's bakery,
-/// the town hall, a windmill, fields and a cottage.
+/// the Old Oak where the mayor holds town meetings, a windmill, fields and a cottage.
 extension VillageRenderer {
     static let greenhouseCenter = (x: 30, base: 224)
     static let bakeryCenter = (x: 180, base: 140)
-    static let townHallCenter = (x: 128, base: 140)
     static let fountain = (x: 128, y: 184)
 
     static func townGround(_ p: Painter, t: Double) {
@@ -14,7 +13,7 @@ extension VillageRenderer {
     }
 
     static func townSquare(_ p: Painter) {
-        // Cobbled square in front of the town hall, joining both streets.
+        // Cobbled square in front of the Old Oak, joining both streets.
         let cx = fountain.x, cy = fountain.y
         p.rect(cx - 9, 150, 18, 82, Color(hex: 0xB8A98F))
         p.rect(cx - 8, 150, 16, 82, Color(hex: 0xD6CAB0))
@@ -60,16 +59,20 @@ extension VillageRenderer {
             case .autumn: return (0xB8902E, 0xE8B83E, 0xF7D77A)
             }
         }()
+        // Stalks first, then heads, then their highlights: three colours in three runs instead of
+        // switching colour for every stalk (the pixels don't overlap, so the picture is the same).
+        var stalks: [(Int, Int, Int)] = []
         for row in stride(from: fy + 3, to: fy + fh, by: 4) {
             for x in stride(from: fx + 1 + (row / 4 % 2), to: fx + fw - 1, by: 2) {
                 let wave = sin(t * 1.6 - Double(x) * 0.18 + Double(row) * 0.3)
                 let lean = wave > 0.45 ? 1 : (wave < -0.45 ? -1 : 0)
                 let h = 4 + noise(x, row) % 2
+                stalks.append((x, row - h, lean))
                 p.rect(x, row - h + 2, 1, h - 1, Color(hex: stalk))
-                p.dot(x + lean, row - h + 1, Color(hex: head))
-                p.dot(x + lean, row - h, Color(hex: headLight))
             }
         }
+        for (x, top, lean) in stalks { p.dot(x + lean, top + 1, Color(hex: head)) }
+        for (x, top, lean) in stalks { p.dot(x + lean, top, Color(hex: headLight)) }
         // Wooden fence on the near side, with a gate gap.
         let fenceY = fy + fh + 1
         p.rect(fx - 2, fenceY + 1, fw + 4, 1, Color(hex: 0x8A6A4A))
@@ -128,7 +131,7 @@ extension VillageRenderer {
         greenhouse(p, t: t, state: state)
         bakery(p, t: t, state: state)
         windmill(at(p, (220, -148)), t: t)
-        townHall(p, t: t)
+        townTree(p, t: t)
         noticeBoard(at(p, (66, -200)), t: t)
         cottage(at(p, (120, -292)), t: t)
         studyHall(p, t: t, state: state)
@@ -302,41 +305,6 @@ extension VillageRenderer {
         }
     }
 
-    static func townHall(_ p: Painter, t: Double) {
-        let cx = townHallCenter.x, base = townHallCenter.base
-        let w = 40, x0 = cx - w / 2, top = base - 22
-        p.rect(x0 + 2, base + 1, w + 2, 2, shadow)
-        // Pediment.
-        for r in 0..<8 {
-            let rowW = 8 + r * 5
-            p.rect(cx - rowW / 2 - 1, top - 9 + r, rowW + 2, 1, ink)
-        }
-        for r in 0..<8 {
-            let rowW = 8 + r * 5
-            p.rect(cx - rowW / 2, top - 9 + r, rowW, 1, Color(hex: 0xE8E2D4))
-        }
-        box(p, cx - 4, top - 6, 8, 4, Color(hex: 0xF2C14E))
-        p.dot(cx, top - 4, ink)
-        // Walls and columns.
-        box(p, x0, top, w, 22, Color(hex: 0xF1EBDD))
-        p.rect(x0 - 2, top - 1, w + 4, 2, Color(hex: 0xC9C0AC))
-        for x in stride(from: x0 + 3, to: x0 + w - 2, by: 7) {
-            p.rect(x, top + 1, 3, 19, Color(hex: 0xDAD2BF))
-            p.rect(x, top + 1, 1, 19, Color.white.opacity(0.5))
-        }
-        carvedSign(p, "MY WEEK", cx: cx, top: top + 1)
-        door(p, x: cx - 4, y: base - 12, w: 8, h: 12, color: Color(hex: 0x6B4A2E))
-        p.rect(x0 - 2, base - 1, w + 4, 1, Color(hex: 0xA39686))
-        p.rect(x0 - 3, base, w + 6, 2, Color(hex: 0xC9C0AC))
-        p.rect(x0 - 3, base + 2, w + 6, 1, ink)
-        // Flag on top.
-        p.rect(cx, top - 18, 1, 9, ink)
-        let wave = Int(t * 3) % 2
-        p.rect(cx + 1, top - 18 + wave, 6, 3, Color(hex: 0xC65F4A))
-        p.rect(cx + 1, top - 17 + wave, 6, 1, Color(hex: 0xF2C14E))
-        if weather == .snow { p.rect(cx - 18, top - 2, 36, 1, Color(hex: 0xF4F7FB)) }
-    }
-
     static func noticeBoard(_ p: Painter, t: Double) {
         let x = 88, y = 378
         p.rect(x + 2, y + 10, 1, 8, ink)
@@ -399,12 +367,11 @@ extension VillageRenderer {
         p.glow(Double(bakeryCenter.x) - 7.5, Double(bakeryCenter.base) - 6, radius: 9, warm, 0.5 * strength)
         p.glow(Double(bakeryCenter.x) + 7.5, Double(bakeryCenter.base) - 6, radius: 9, warm, 0.5 * strength)
         p.glow(Double(greenhouseCenter.x), Double(greenhouseCenter.base) - 10, radius: 16, Color(hex: 0xC8F0C0), 0.35 * strength)
-        p.glow(Double(townHallCenter.x), Double(townHallCenter.base) - 6, radius: 12, warm, 0.4 * strength)
+        oakLights(p, strength: strength)
         p.glow(220, 134, radius: 6, warm, 0.5 * strength)
         studyHallLights(p, strength: strength)
-        // Lanterns by the bakery, town hall and greenhouse doors.
+        // Lanterns by the bakery and greenhouse doors.
         porchLantern(p, x: bakeryCenter.x + 5, y: bakeryCenter.base - 10, t: 0, strength: strength)
-        porchLantern(p, x: townHallCenter.x + 6, y: townHallCenter.base - 13, t: 0, strength: strength)
         porchLantern(p, x: greenhouseCenter.x + 5, y: greenhouseCenter.base - 10, t: 0, strength: strength)
         for (x, y) in townLamps {
             p.glow(Double(x) + 0.5, Double(y) - 1.5, radius: 12, warm, 0.45 * strength)

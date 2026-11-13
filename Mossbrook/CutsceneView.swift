@@ -143,6 +143,9 @@ struct CutsceneView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(line.text)
         .accessibilityHint(isLast ? "Closes the scene" : "Shows the next line")
+        .onChange(of: index, initial: true) {
+            if line.text.contains("Ring ring") { SoundFX.shared.play(.bikeBell) }
+        }
         .task(id: index) {
             // About 70 letters a second, measured by the clock so a busy screen can't slow it down.
             shown = 0
@@ -157,6 +160,7 @@ struct CutsceneView: View {
     }
 
     private func advance() {
+        SoundFX.shared.play(.page, volume: 0.6)
         if isTyping {
             shown = line.text.count
         } else if !isLast {

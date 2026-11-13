@@ -170,6 +170,23 @@ enum VillageRenderer {
         drawLive(p, t: t, state: state, effects: effects)
     }
 
+    /// One night sky of stars across the whole world, so zooming out shows no seam where the town ends.
+    /// The town draws the stars above it (in town pixels); the woods draw the rest (in world pixels).
+    static func worldStars(_ p: Painter, t: Double, inTown: Bool) {
+        let M = VillageLayout.margin
+        let WW = VillageLayout.worldWidth
+        // Same density as the town always had: 28 stars per 256 pixels.
+        let count = 28 * WW / W
+        for i in 0..<count {
+            let x = noise(i, 7) % WW
+            let insideTown = (M..<(M + W)).contains(x)
+            guard insideTown == inTown else { continue }
+            let y = noise(i, 13) % 40
+            guard (noise(i, 3) + Int(t * 2)) % 6 != 0 else { continue }
+            p.dot(inTown ? x - M : x, y, Color.white.opacity(noise(i, 5) % 2 == 0 ? 0.9 : 0.5))
+        }
+    }
+
     /// Sun, moon, stars, clouds and the balloon: the bits behind the hills.
     static func drawSky(_ p: Painter, t: Double, state: SceneState, effects: [VillageEffect] = []) {
         weather = state.weather
@@ -251,10 +268,10 @@ enum VillageRenderer {
         "A": ["010", "101", "111", "101", "101"], "B": ["110", "101", "110", "101", "110"],
         "C": ["011", "100", "100", "100", "011"], "E": ["111", "100", "110", "100", "111"],
         "F": ["111", "100", "110", "100", "100"], "G": ["011", "100", "101", "101", "011"], "H": ["101", "101", "111", "101", "101"],
-        "I": ["111", "010", "010", "010", "111"], "K": ["101", "110", "100", "110", "101"],
+        "I": ["111", "010", "010", "010", "111"], "K": ["101", "101", "110", "101", "101"],
         "M": ["10001", "11011", "10101", "10001", "10001"], "N": ["1001", "1101", "1011", "1001", "1001"],
         "O": ["010", "101", "101", "101", "010"], "R": ["110", "101", "110", "101", "101"],
-        "S": ["011", "100", "010", "001", "110"], "T": ["111", "010", "010", "010", "010"],
+        "S": ["111", "100", "111", "001", "111"], "T": ["111", "010", "010", "010", "010"],
         "U": ["101", "101", "101", "101", "111"], "W": ["10001", "10001", "10101", "11011", "10001"],
         "Y": ["101", "101", "010", "010", "010"]
     ]
@@ -264,29 +281,44 @@ enum VillageRenderer {
         let width = text.reduce(0) { $0 + ($1 == " " ? 2 : (carvedGlyphs[$1]?.first?.count ?? 3) + 1) } - 1
         let w = width + 6
         let x0 = cx - w / 2
-        p.rect(x0 + 1, top + 1, w, 7, Color.black.opacity(0.25))
-        p.rect(x0 - 1, top - 1, w + 2, 9, ink)
-        p.rect(x0, top, w, 7, Color(hex: 0xB8865A))
-        p.rect(x0, top, w, 1, Color(hex: 0xD9A877))
-        p.rect(x0, top + 6, w, 1, Color(hex: 0x9A6A44))
-        for gx in stride(from: x0 + 2, to: x0 + w - 2, by: 7) { p.dot(gx, top + 3 + (gx % 2), Color(hex: 0xA77A50)) }
-        p.dot(x0 + 1, top + 3, Color(hex: 0x6B4A2E))
-        p.dot(x0 + w - 2, top + 3, Color(hex: 0x6B4A2E))
-        var x = x0 + 3
+        // A sign never changes, so it's built once as a little picture and reused every frame.
+        p.sprite(carvedSignSprite(text, w: w, parity: x0 & 1), x: x0 - 1, y: top - 1)
+    }
+
+    nonisolated(unsafe) private static var signSprites: [String: Sprite] = [:]
+    private static let signLock = NSLock()
+
+    /// The carved wooden sign as a sprite: ink border, wood with a light top and dark bottom edge,
+    /// a little grain, two nails, and the letters cut in (a light lip under a dark groove).
+    private static func carvedSignSprite(_ text: String, w: Int, parity: Int) -> Sprite {
+        let key = "\(text)|\(parity)"
+        signLock.lock(); defer { signLock.unlock() }
+        if let hit = signSprites[key] { return hit }
+        // Grid covers the ink border: (w + 2) × 9, origin one pixel up-left of the wood.
+        var g = Array(repeating: Array(repeating: Character("k"), count: w + 2), count: 9)
+        func set(_ x: Int, _ y: Int, _ c: Character) {
+            let gx = x + 1, gy = y + 1
+            guard gy >= 0, gy < g.count, gx >= 0, gx < g[0].count else { return }
+            g[gy][gx] = c
+        }
+        for y in 0..<7 { for x in 0..<w { set(x, y, "b") } }
+        for x in 0..<w { set(x, 0, "l"); set(x, 6, "d") }
+        // Grain, at the same spots as before (it depended on the sign's absolute x).
+        for gx in stride(from: 2, to: w - 2, by: 7) { set(gx, 3 + ((gx + parity) % 2), "g") }
+        set(1, 3, "n"); set(w - 2, 3, "n")
+        var x = 3
         for ch in text {
             guard let glyph = carvedGlyphs[ch] else { x += 2; continue }
-            for (r, row) in glyph.enumerated() {
-                for (c, bit) in row.enumerated() where bit == "1" {
-                    p.dot(x + c, top + 2 + r, Color(hex: 0xE6BE8E))
-                }
-            }
-            for (r, row) in glyph.enumerated() {
-                for (c, bit) in row.enumerated() where bit == "1" {
-                    p.dot(x + c, top + 1 + r, Color(hex: 0x3A2218))
-                }
-            }
+            for (r, row) in glyph.enumerated() { for (c, bit) in row.enumerated() where bit == "1" { set(x + c, 2 + r, "h") } }
+            for (r, row) in glyph.enumerated() { for (c, bit) in row.enumerated() where bit == "1" { set(x + c, 1 + r, "c") } }
             x += glyph[0].count + 1
         }
+        let sprite = Sprite(g.map { String($0) }, [
+            "k": ink, "b": Color(hex: 0xB8865A), "l": Color(hex: 0xD9A877), "d": Color(hex: 0x9A6A44),
+            "g": Color(hex: 0xA77A50), "n": Color(hex: 0x6B4A2E), "h": Color(hex: 0xCC9C6C), "c": Color(hex: 0x2E1A12)
+        ])
+        signSprites[key] = sprite
+        return sprite
     }
 
     /// A filled rectangle with a 1-pixel ink outline, the backbone of the pixel look.
@@ -416,12 +448,8 @@ enum VillageRenderer {
             p.glow(202, 44, radius: 16, Color(hex: 0xFFB070), 0.7)
             circle(p, cx: 202, cy: 44, r: 5, Color(hex: 0xFF9E5E))
         case .night:
-            for i in 0..<28 {
-                let x = noise(i, 7) % W
-                let y = noise(i, 13) % 40
-                let twinkle = (noise(i, 3) + Int(t * 2)) % 6 != 0
-                if twinkle { p.dot(x, y, Color.white.opacity(noise(i, 5) % 2 == 0 ? 0.9 : 0.5)) }
-            }
+            // The town's share of the one star field that spans the whole world.
+            worldStars(p, t: t, inTown: true)
             p.glow(204, 30, radius: 10, Color(hex: 0xF4EBC8), 0.35)
             circle(p, cx: 204, cy: 30, r: 4, Color(hex: 0xF4EBC8))
             circle(p, cx: 206, cy: 28, r: 3, Color(hex: 0x161B3A))
@@ -885,13 +913,8 @@ enum VillageRenderer {
     /// Redraws the villagers above the night window lights and lanterns, shaded to match the evening,
     /// so a glowing window never covers someone's head.
     static func villagersOnTop(_ p: Painter, t: Double, state: SceneState, tints: [(UInt32, Double)]) {
-        p.ctx.drawLayer { layer in
-            let q = Painter(ctx: layer, s: p.s)
+        p.tintedLayer(width: W, height: H, tints: tints.map { Color(hex: $0.0).opacity($0.1) }) { q in
             villagers(q, t: t, state: state)
-            layer.blendMode = .sourceAtop
-            for (hex, a) in tints {
-                layer.fill(Path(CGRect(x: 0, y: 0, width: CGFloat(W) * p.s, height: CGFloat(H) * p.s)), with: .color(Color(hex: hex).opacity(a)))
-            }
         }
     }
 
@@ -905,6 +928,73 @@ enum VillageRenderer {
             let y = Int(pose.y) - 16 + bob
             p.rect(x + 4, Int(pose.y) - 1, 8, 1, shadow)
             p.sprite(v.sprite, x: x, y: y, flip: pose.facingLeft)
+            if weather == .rain || weather == .snow {
+                umbrella(p, v, x: x, y: y, flip: pose.facingLeft, t: t, walking: pose.walking)
+            }
+        }
+    }
+
+    /// Each villager's own umbrella: (canopy, stripe or pattern, trim).
+    static func umbrellaColors(_ v: VillagerID) -> (Color, Color, Color) {
+        switch v {
+        case .pip: (Color(hex: 0x4A6FA5), Color(hex: 0xF2C14E), Color(hex: 0x34507C))      // postal blue, gold stripes
+        case .mo: (Color(hex: 0x8E5A8A), Color(hex: 0xFFF3B0), Color(hex: 0x6A3F66))       // plum with little stars
+        case .bea: (Color(hex: 0xF2A07A), Color(hex: 0xFFF6E5), Color(hex: 0xC4704C))      // café awning stripes
+        case .juniper: (Color(hex: 0x78B86A), Color(hex: 0xC9E8A8), Color(hex: 0x4C8648)) // leafy green, a leaf on top
+        case .rosie: (Color(hex: 0xF49AC1), Color(hex: 0xFFFFFF), Color(hex: 0xC2577A))    // strawberry pink, polka dots
+        }
+    }
+
+    /// A cute dome umbrella held over the head, with scalloped edges and a pattern per villager.
+    static func umbrella(_ p: Painter, _ v: VillagerID, x: Int, y: Int, flip: Bool, t: Double, walking: Bool) {
+        let (main, accent, trim) = umbrellaColors(v)
+        let tilt = walking ? (flip ? 1 : -1) : 0
+        let cx = flip ? x + 5 : x + 11, top = y - 5
+        // Handle held at the side, ending in the hand with a little hook.
+        let hx = flip ? x + 2 : x + 14
+        p.rect(hx, top + 6, 1, 11, ink)
+        p.rect(hx + (flip ? 1 : -1), top + 16, 1, 1, ink)
+        p.rect(hx + (flip ? 1 : -1), top + 15, 1, 1, Color(hex: 0xF6CFA8))
+        // Canopy rows: half-widths from the tip down.
+        let rows = [1, 4, 6, 8, 9]
+        for (r, hw) in rows.enumerated() {
+            let ox = cx + tilt * (rows.count - r) / 3
+            p.rect(ox - hw - 1, top + r - 1, hw * 2 + 3, 1, ink)
+            p.rect(ox - hw - 1, top + r, hw * 2 + 3, 1, ink)
+        }
+        for (r, hw) in rows.enumerated() where r > 0 {
+            let ox = cx + tilt * (rows.count - r) / 3
+            p.rect(ox - hw, top + r, hw * 2 + 1, 1, main)
+        }
+        // Scalloped bottom edge.
+        let ox = cx
+        for k in stride(from: -9, through: 9, by: 3) {
+            p.rect(ox + k - 1, top + 5, 2, 1, ink)
+            p.rect(ox + k - 1 + 1, top + 5, 1, 1, trim)
+        }
+        // Patterns.
+        switch v {
+        case .pip, .bea:
+            for k in stride(from: -6, through: 6, by: 4) { p.rect(ox + k, top + 2, 1, 3, accent) }
+        case .mo:
+            p.dot(ox - 4, top + 3, accent); p.dot(ox + 3, top + 2, accent); p.dot(ox + 6, top + 4, accent); p.dot(ox - 1, top + 4, accent)
+        case .rosie:
+            p.dot(ox - 5, top + 3, accent); p.dot(ox - 1, top + 2, accent); p.dot(ox + 3, top + 4, accent); p.dot(ox + 6, top + 3, accent)
+        case .juniper:
+            p.rect(ox - 6, top + 3, 13, 1, accent)
+            p.rect(cx + 1, top - 2, 2, 1, Color(hex: 0x78B86A)); p.dot(cx + 2, top - 3, Color(hex: 0x4C8648))
+        }
+        p.rect(ox - 5, top + 1, 3, 1, Color.white.opacity(0.45))
+        p.rect(min(cx, hx), top + 5, abs(hx - cx) + 1, 1, ink)
+        p.dot(cx, top - 1, ink)
+        if weather == .snow {
+            p.rect(ox - 4, top, 9, 1, Color(hex: 0xF4F7FB))
+            p.rect(ox - 6, top + 1, 3, 1, Color(hex: 0xF4F7FB)); p.rect(ox + 4, top + 1, 3, 1, Color(hex: 0xF4F7FB))
+        } else {
+            // Raindrops bouncing off.
+            let k = (t * 3 + Double(x)).truncatingRemainder(dividingBy: 1)
+            p.dot(ox - 9 - Int(k * 2), top + 4 + Int(k * 3), Color(hex: 0xBDE5F4).opacity(1 - k))
+            p.dot(ox + 9 + Int(k * 2), top + 4 + Int(k * 3), Color(hex: 0xBDE5F4).opacity(1 - k))
         }
     }
 
@@ -998,7 +1088,7 @@ final class TownBaseCache {
         let scale: CGFloat = 2
         let w = CGFloat(VillageLayout.width), h = CGFloat(VillageLayout.height)
         let renderer = ImageRenderer(content:
-            Canvas { ctx, _ in VillageRenderer.drawBase(Painter(ctx: ctx, s: scale), state: state) }
+            Canvas { ctx, _ in Painter.batched(ctx, s: scale) { VillageRenderer.drawBase($0, state: state) } }
                 .frame(width: w * scale, height: h * scale)
         )
         renderer.scale = 1

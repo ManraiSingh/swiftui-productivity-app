@@ -15,4 +15,18 @@ final class QuietNotifications: NSObject, UNUserNotificationCenterDelegate {
     ) {
         completionHandler(Self.strictModeOn ? [.list] : [.banner, .sound, .list])
     }
+
+    /// Set when a Together House reminder is tapped, so the app opens straight into the house.
+    static var openTogether: (() -> Void)?
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if response.notification.request.identifier.hasPrefix(TogetherReminders.prefix) {
+            DispatchQueue.main.async { Self.openTogether?() }
+        }
+        completionHandler()
+    }
 }

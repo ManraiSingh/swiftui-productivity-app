@@ -26,7 +26,7 @@ struct TourStop {
         TourStop(villager: .rosie, place: "Baker · Treats",
                  text: "Focus sessions earn you treats. Eat one on a break, or save three to rescue a streak."),
         TourStop(villager: .pip, place: "Welcome home",
-                 text: "Tap + any time to add a letter or a note. The town hall shows your week. Have fun!",
+                 text: "Tap + any time to add a letter or a note. Pop by the Old Oak for a town meeting with the mayor. Have fun!",
                  isClosing: true)
     ]
 }

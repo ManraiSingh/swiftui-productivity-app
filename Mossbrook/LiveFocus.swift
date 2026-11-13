@@ -4,6 +4,11 @@ import WidgetKit
 
 /// Keeps the Live Activity in step with the current focus session.
 enum LiveFocus {
+    /// The title the Together House gives its shared sessions.
+    static let togetherTitle = "Together House"
+    /// Who's focusing in your Together House session right now, kept fresh by the house.
+    static var togetherPeople = 0
+
     static func drinkHex(_ raw: String) -> UInt32 {
         ["tea": 0x9CB86A, "espresso": 0x6B4226, "latte": 0xC69C6D, "taste": 0xB9A9C9][raw] ?? 0x6B4226
     }
@@ -17,7 +22,9 @@ enum LiveFocus {
             }
             let state = FocusActivityAttributes.ContentState(
                 title: s.title, start: s.start, end: s.end, onBreak: s.onBreak,
-                round: s.round, rounds: s.rounds, drinkHex: drinkHex(s.drink)
+                round: s.round, rounds: s.rounds, drinkHex: drinkHex(s.drink),
+                together: s.title == togetherTitle ? true : nil,
+                people: s.title == togetherTitle ? togetherPeople : nil
             )
             let content = ActivityContent(state: state, staleDate: s.end.addingTimeInterval(120))
             if let activity = running.first {

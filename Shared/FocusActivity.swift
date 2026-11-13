@@ -11,6 +11,9 @@ struct FocusActivityAttributes: ActivityAttributes {
         var round: Int
         var rounds: Int
         var drinkHex: UInt32
+        /// In a Together House session, and how many people are focusing in it.
+        var together: Bool? = nil
+        var people: Int? = nil
     }
 
     var name: String

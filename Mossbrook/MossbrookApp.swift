@@ -7,6 +7,8 @@ struct MossbrookApp: App {
 
     init() {
         UNUserNotificationCenter.current().delegate = QuietNotifications.shared
+        SoundFX.shared.prepare()
+        PixelButtonStyle.onPress = { SoundFX.shared.play(.pop, volume: 0.7) }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-mergeSelfTest") { MergeSelfTest.run() }
         #endif

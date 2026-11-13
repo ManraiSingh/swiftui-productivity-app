@@ -153,6 +153,7 @@ final class CloudSync: @unchecked Sendable {
         m.focusMinutes = max(a.focusMinutes, b.focusMinutes)
         m.focusSessions = max(a.focusSessions, b.focusSessions)
         m.treatsSpent = max(a.treatsSpent, b.treatsSpent)
+        m.togetherSessions = max(a.togetherSessions, b.togetherSessions)
         for (k, v) in b.friendship { m.friendship[k] = max(v, m.friendship[k] ?? 0) }
         m.letterDay = [a.letterDay, b.letterDay].compactMap { $0 }.max()
         m.activeFocus = a.activeFocus ?? b.activeFocus

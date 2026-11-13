@@ -260,10 +260,11 @@ struct GreenhouseView: View {
                     TimelineView(.animation(minimumInterval: 1.0 / 15)) { tl in
                         let t = tl.date.timeIntervalSinceReferenceDate
                         ZStack(alignment: .topLeading) {
-                            Canvas { ctx, _ in
+                            let phase = store.phase, habits = store.habits, watering = watering, now = tl.date
+                            PixelCanvas(cols: GreenhouseRenderer.W, rows: rows, s: s, frame: t) { p in
                                 GreenhouseRenderer.draw(
-                                    Painter(ctx: ctx, s: s), t: t, rows: rows, phase: store.phase,
-                                    habits: store.habits, watering: watering, now: tl.date
+                                    p, t: t, rows: rows, phase: phase,
+                                    habits: habits, watering: watering, now: now
                                 )
                             }
                             slots(s: s)
@@ -278,7 +279,7 @@ struct GreenhouseView: View {
                                 Canvas { ctx, _ in
                                     var moved = ctx
                                     moved.translateBy(x: margin, y: 0)
-                                    GreenhouseRenderer.wings(Painter(ctx: moved, s: s), t: t, rows: rows, phase: store.phase, extra: extra)
+                                    Painter.batched(moved, s: s) { GreenhouseRenderer.wings($0, t: t, rows: rows, phase: store.phase, extra: extra) }
                                 }
                                 .allowsHitTesting(false)
                             }

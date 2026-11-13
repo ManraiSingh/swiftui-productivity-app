@@ -41,6 +41,8 @@ extension View {
 }
 
 struct PixelButtonStyle: ButtonStyle {
+    /// Set by the app to play a little sound when any pixel button is pressed.
+    nonisolated(unsafe) static var onPress: (() -> Void)?
     var fill: Color = Theme.gold
     var foreground: Color = Theme.ink
     var hPad: CGFloat = 16
@@ -71,6 +73,7 @@ private struct PixelButtonBody: View {
             .offset(x: configuration.isPressed ? 2 : 0, y: configuration.isPressed ? 2 : 0)
             .opacity(isEnabled ? 1 : 0.45)
             .saturation(isEnabled ? 1 : 0.3)
+            .onChange(of: configuration.isPressed) { _, down in if down { PixelButtonStyle.onPress?() } }
     }
 }
 

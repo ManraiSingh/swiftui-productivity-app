@@ -22,6 +22,8 @@ struct HallVisitor: Identifiable, Equatable {
     var emoteAt: Date?
     var say: Int = -1
     var sayAt: Date?
+    /// Shared sessions finished back to back. The most in the house wears the crown.
+    var row: Int = 0
 }
 
 /// Presence in the Together House, kept in the app's public iCloud database.
@@ -180,6 +182,13 @@ final class HallService {
         push()
     }
 
+    func setRow(_ row: Int) {
+        guard var v = me, v.row != row else { return }
+        v.row = row
+        me = v
+        push()
+    }
+
     func update(status: HallVisitor.Status, until: Date?) {
         guard var v = me, v.status != status || v.until != until else { return }
         v.status = status; v.until = until
@@ -231,6 +240,7 @@ final class HallService {
         record["emoteAt"] = v.emoteAt
         record["say"] = v.say
         record["sayAt"] = v.sayAt
+        record["row"] = v.row
         // While focusing, the seat stays fresh until the block ends even if the phone is locked.
         record["seen"] = max(Date(), (v.status == .focus ? v.until : nil) ?? .distantPast)
         do {
@@ -244,7 +254,7 @@ final class HallService {
         guard !demo else { return }
         let cutoff = Date().addingTimeInterval(-Self.fresh)
         let query = CKQuery(recordType: Self.visitorType, predicate: NSPredicate(format: "seen > %@", cutoff as NSDate))
-        let keys = ["name", "status", "until", "look", "seen", "x", "y", "spot", "food", "emote", "emoteAt", "say", "sayAt"]
+        let keys = ["name", "status", "until", "look", "seen", "x", "y", "spot", "food", "emote", "emoteAt", "say", "sayAt", "row"]
         do {
             let (results, _) = try await db.records(matching: query, desiredKeys: keys, resultsLimit: 60)
             let mine = myID
@@ -262,6 +272,7 @@ final class HallService {
                 v.emoteAt = r["emoteAt"] as? Date
                 v.say = r["say"] as? Int ?? -1
                 v.sayAt = r["sayAt"] as? Date
+                v.row = min(max(r["row"] as? Int ?? 0, 0), 48)
                 return v
             }
             .sorted { $0.id < $1.id }
@@ -308,7 +319,10 @@ final class HallService {
             }
             v.food = i % 5
             v.status = spots[i].hasPrefix("work") ? .focus : (spots[i].hasPrefix("eat") ? .rest : .here)
-            v.until = Date().addingTimeInterval(Double(8 + i * 4) * 60)
+            v.row = [3, 1, 4, 0, 2, 0, 0, 0, 1][i]
+            // People at desks are in the shared session, so they finish with you.
+            let slot = TogetherSchedule.upcoming(after: .now, includeRunning: true)
+            v.until = spots[i].hasPrefix("work") ? slot.focusEnd : Date().addingTimeInterval(Double(8 + i * 4) * 60)
             return v
         }
     }()
@@ -385,4 +399,15 @@ enum NameRules {
         "kys", "negro", "prick", "lund", "puta", "puto", "hure", "merde", "porra", "cabron", "nigga", "tit",
         "fuk", "shit", "shitty", "bullshit", "porn", "porno", "rape", "rapist", "nazi", "nazis"
     ]
+}
+
+/// Everyone in the Together House is anonymous: a cozy two-word name picked for you.
+/// Names only ever come from these lists, so nobody can type anything unkind.
+enum CozyNames {
+    static let adjectives = ["Sleepy", "Cozy", "Mellow", "Sunny", "Misty", "Quiet", "Toasty", "Gentle", "Velvet", "Maple",
+                             "Honey", "Little", "Starry", "Mossy", "Peachy", "Snowy", "Breezy", "Minty", "Dreamy", "Lucky"]
+    static let animals = ["Otter", "Fox", "Owl", "Bunny", "Panda", "Hedgehog", "Kitten", "Duckling", "Koala", "Fawn",
+                          "Robin", "Mole", "Badger", "Seal", "Lamb", "Wren", "Frog", "Moth", "Puffin", "Mouse"]
+
+    static func random() -> String { "\(adjectives.randomElement()!) \(animals.randomElement()!)" }
 }

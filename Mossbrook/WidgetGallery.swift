@@ -41,6 +41,13 @@ struct WidgetGallery: View {
                 .buttonStyle(PixelButtonStyle(fill: Theme.card, foreground: Theme.ink))
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     VStack(spacing: 22) {
+                Text("TOGETHER HOUSE").font(.pixel(12, .heavy)).foregroundStyle(.white)
+                HStack(spacing: 16) {
+                    togetherSmall(together(running: true))
+                    togetherSmall(together(running: false))
+                }
+                tile(364, 170) { TogetherWidgetView(fam: .systemMedium, entry: together(running: true)) }
+                tile(364, 170) { TogetherWidgetView(fam: .systemMedium, entry: together(running: false)) }
                 tile(170, 170, small: { TodayView(fam: .systemSmall, entry: entry) }, scene: .town(entry.snap.lettersLeft))
                 tile(364, 170) { TodayView(fam: .systemMedium, entry: entry) }
                 tile(364, 382) { TodayView(fam: .systemLarge, entry: entry) }
@@ -52,6 +59,31 @@ struct WidgetGallery: View {
         .background(Color(hex: 0x3B4A7A))
         .environment(\.colorScheme, .light)
         .preferredColorScheme(.dark)
+    }
+
+    /// A Together House entry: during a session, or waiting for the next one.
+    private func together(running: Bool) -> TogetherEntry {
+        let now = Date()
+        let live = TogetherSchedule.upcoming(after: now, includeRunning: true)
+        if running {
+            let slot = live.focusing(at: now) ? live : TogetherSchedule.Slot(start: now.addingTimeInterval(-9 * 60))
+            return TogetherEntry(date: now, slot: slot, running: true, people: 8)
+        }
+        let next = live.focusing(at: now) ? live.next : live
+        return TogetherEntry(date: now, slot: next, running: false, people: nil)
+    }
+
+    private func togetherSmall(_ e: TogetherEntry) -> some View {
+        let progress = e.running ? now(e) : 0
+        return TogetherWidgetView(fam: .systemSmall, entry: e)
+            .padding(14)
+            .frame(width: 170, height: 170)
+            .background(TogetherScene(running: e.running, progress: progress, grid: 52))
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private func now(_ e: TogetherEntry) -> Double {
+        max(0, min(1, Date().timeIntervalSince(e.slot.start) / e.slot.focusEnd.timeIntervalSince(e.slot.start)))
     }
 
     private func tile<V: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ content: () -> V) -> some View {

@@ -31,6 +31,7 @@ DEFINE SCHEMA
         emoteAt         TIMESTAMP,
         say             INT64,
         sayAt           TIMESTAMP,
+        row             INT64,
         seen            TIMESTAMP QUERYABLE SORTABLE,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",

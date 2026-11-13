@@ -131,6 +131,15 @@ final class CafeScene {
     var brewStart: Date?
     var eatingUntil: Date?
     var workMinutes = 25
+
+    /// The few things the drawing needs, frozen for one frame (drawing happens off the main thread).
+    struct Snapshot {
+        let mode: Mode
+        let seatID: Int?
+        let drink: Drink
+    }
+    var snapshot: Snapshot { Snapshot(mode: mode, seatID: seatID, drink: drink) }
+
     var breakMinutes = 0
     var rounds = 1
     private var arrival: Task<Void, Never>?
@@ -215,6 +224,9 @@ struct CafeView: View {
             StrictModeView()
         }
         .onAppear {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-openStrict") { Task { try? await Task.sleep(for: .seconds(1.5)); showStrict = true } }
+            #endif
             guard !loaded else { return }
             loaded = true
             if let session = store.activeFocus {
@@ -255,13 +267,16 @@ struct CafeFloor: View {
                 let bea = CafeRenderer.baristaX(at: now, brewing: scene.mode == .brewing)
 
                 ZStack(alignment: .topLeading) {
-                    Canvas { ctx, _ in
+                    // Everything the drawing needs, read here on the main thread (it draws in the background).
+                    let phase = store.phase, level = store.cafeLevel, snap = scene.snapshot
+                    let onBreak = session?.onBreak ?? false, eating = (scene.eatingUntil ?? .distantPast) > now
+                    let breakT = session.map { now.timeIntervalSince($0.start) } ?? 0
+                    PixelCanvas(cols: 128, rows: rows, s: s, frame: t) { p in
                         CafeRenderer.edgeShade = !wide
                         CafeRenderer.draw(
-                            Painter(ctx: ctx, s: s), t: t, rows: rows, phase: store.phase, level: store.cafeLevel,
-                            you: you, scene: scene, fill: fill, visitor: visitor, beaX: bea,
-                            onBreak: session?.onBreak ?? false, eating: (scene.eatingUntil ?? .distantPast) > now,
-                            breakT: session.map { now.timeIntervalSince($0.start) } ?? 0
+                            p, t: t, rows: rows, phase: phase, level: level,
+                            you: you, scene: snap, fill: fill, visitor: visitor, beaX: bea,
+                            onBreak: onBreak, eating: eating, breakT: breakT
                         )
                     }
 
@@ -332,7 +347,7 @@ struct CafeFloor: View {
                         Canvas { ctx, _ in
                             var moved = ctx
                             moved.translateBy(x: margin, y: 0)
-                            CafeRenderer.wings(Painter(ctx: moved, s: s), t: t, rows: rows, phase: store.phase, extra: extra)
+                            Painter.batched(moved, s: s) { CafeRenderer.wings($0, t: t, rows: rows, phase: store.phase, extra: extra) }
                         }
                         .allowsHitTesting(false)
                     }
@@ -701,7 +716,10 @@ struct BreakCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("BREAK · ROUND \(session.round) OF \(session.rounds) DONE")
+                    // The break after the last round is a reward, not a pause between rounds.
+                    Text(session.round >= session.rounds
+                         ? (session.rounds > 1 ? "BREAK · ALL \(session.rounds) ROUNDS DONE" : "BREAK · FOCUS DONE")
+                         : "BREAK · ROUND \(session.round) OF \(session.rounds) DONE")
                         .font(.pixel(10))
                         .foregroundStyle(Theme.muted)
                     Text("Wander, sip, say hi.")
@@ -725,7 +743,7 @@ struct BreakCard: View {
                 Button {
                     store.skipBreak()
                 } label: {
-                    Text("Skip break").frame(maxWidth: .infinity)
+                    Text(session.round >= session.rounds ? "End break" : "Skip break").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PixelButtonStyle(fill: Theme.card, hPad: 8))
             }

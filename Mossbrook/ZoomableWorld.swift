@@ -33,7 +33,8 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
         scroll.showsVerticalScrollIndicator = false
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.bounces = false
-        scroll.bouncesZoom = true
+        // No rubber-banding past the limits: the farthest zoom-out is a hard stop.
+        scroll.bouncesZoom = false
         scroll.backgroundColor = .clear
         scroll.decelerationRate = .normal
 
@@ -155,6 +156,7 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
             let s1 = CGPoint(x: point.x * z1 - o1.x, y: point.y * z1 - o1.y)
             scroll.zoomScale = z0; keepInside(scroll); scroll.contentOffset = o0
             zoomStart = (CACurrentMediaTime(), z0, z1, s0, s1, point)
+            beginLiveZoom()
             let l = CADisplayLink(target: self, selector: #selector(stepZoom))
             l.add(to: .main, forMode: .common)
             link = l
@@ -175,6 +177,7 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
             scroll.contentOffset = CGPoint(x: x, y: y)
             if k >= 1 {
                 link?.invalidate(); link = nil; zoomStart = nil
+                endLiveZoom()
                 report(scroll, force: true)
             }
         }
@@ -238,9 +241,43 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
         }
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            // Hard stop: never further out (or in) than allowed, whatever asked for it.
+            let z = scrollView.zoomScale
+            let clamped = min(max(z, scrollView.minimumZoomScale), scrollView.maximumZoomScale)
+            if abs(clamped - z) > 0.0001 { scrollView.zoomScale = clamped; return }
             keepInside(scrollView)
             refreshVisible()
             report(scrollView)
+        }
+
+        // MARK: Cheap live zoom
+        // Laying the whole town out again at every step of a pinch meant redrawing thousands of pixels
+        // 60–120 times a second. While fingers (or the tour's glide) are zooming, the last sharp picture
+        // is just scaled; when the zoom settles, the town is laid out once at the new size.
+
+        /// The zoom the town was last laid out at, while a live zoom is running.
+        private var frozenZoom: CGFloat?
+
+        private var liveZooming: Bool {
+            guard let scroll else { return false }
+            return scroll.isZooming || scroll.isZoomBouncing || zoomStart != nil || snapping
+        }
+        private var snapping = false
+
+        func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+            beginLiveZoom()
+        }
+
+        private func beginLiveZoom() {
+            guard frozenZoom == nil, let scroll, host?.view != nil else { return }
+            frozenZoom = scroll.zoomScale
+        }
+
+        private func endLiveZoom() {
+            guard frozenZoom != nil, let v = host?.view, let c = container else { return }
+            frozenZoom = nil
+            v.transform = .identity
+            v.frame = c.frame
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -251,6 +288,16 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
         /// SwiftUI only draws what it thinks is on screen; make it look again after zooming or scrolling.
         private func refreshVisible() {
             guard let v = host?.view, let c = container else { return }
+            if let z0 = frozenZoom, let scroll, liveZooming {
+                // Keep the old layout, scaled to where the town is now.
+                let k = scroll.zoomScale / max(z0, 0.0001)
+                let size = CGSize(width: c.bounds.width * z0, height: c.bounds.height * z0)
+                if v.bounds.size != size { v.transform = .identity; v.frame = CGRect(origin: .zero, size: size) }
+                v.transform = CGAffineTransform(scaleX: k, y: k)
+                v.center = c.center
+                return
+            }
+            if frozenZoom != nil { endLiveZoom(); return }
             if v.frame != c.frame { v.frame = c.frame }
         }
 
@@ -258,9 +305,13 @@ struct ZoomableWorld<Content: View>: UIViewRepresentable {
             // Ease to the nearest crisp size (every art pixel a whole number of screen pixels).
             let step = parent.snapStep
             let target = min(max((scale / step).rounded() * step, parent.minZoom), parent.maxZoom)
-            guard abs(target - scale) > 0.001 else { return }
+            guard abs(target - scale) > 0.001 else { endLiveZoom(); return }
+            snapping = true
             UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
                 scrollView.zoomScale = target
+            } completion: { [weak self] _ in
+                self?.snapping = false
+                self?.endLiveZoom()
             }
         }
 

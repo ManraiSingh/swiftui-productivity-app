@@ -37,8 +37,11 @@ You come in with a name and a character, then tap the floor to walk or tap a sea
 
 There's no free text, so there's nothing to moderate except names. Each phone keeps one small record in the app's public CloudKit database: name, look, position, seat, snack, last emote and last line, by number. It reads everyone else's every 3 seconds. Other people walk smoothly between updates along the room's lanes and middle aisle, so movement looks live, and each bubble shows for the same few seconds on every phone. While you focus, you stay in your seat until the block ends, even with the phone locked. Names go through a filter that handles look-alike characters and checks whole words, and a name reported by two different people is hidden for everyone. The room is 128 pixels wide; wider screens get more wall, floor, shelves and plants. Setup and moderation steps are in [`CloudKit/README.md`](CloudKit/README.md).
 
-**Bakery and town hall**
-Every finished cup and delivered letter bakes a treat. Treats can be eaten on a break, gifted to a villager to raise their hearts, or spent three at a time to save a broken streak. The town hall shows the week as a stacked chart of letters, pages and habits, alongside totals and the best day.
+**Bakery**
+Every finished cup and delivered letter bakes a treat. Treats can be eaten on a break, gifted to a villager to raise their hearts, or spent three at a time to save a broken streak.
+
+**The Old Oak and the town meeting**
+A big green pixel oak with a wide, lumpy cartoon canopy stands at the heart of the town, with lanterns hanging from its branches. It stays green all year, with a sprinkle of autumn leaves, spring blossom or winter snow. Mayor Barnaby, a little top-hatted mayor with a big white mustache, waits underneath. Tapping the tree opens a town meeting: a close-up scene under the oak, with the villagers on a picnic blanket around the mayor's stump, lanterns glowing, leaves falling, an owl peeking from the knot hole at night, and Biscuit the cat asleep on the swing. The meeting plays out as a live group chat written from your real progress: a typing bubble with bouncing dots appears over whoever is about to speak, then their message pops in with their face and name. Tapping the scene skips ahead, and a Full report button opens the mayor's report, with a 7-day chart, all your totals, progress towards Pip's bike, Mo's book and a full café, and your best day. Pip reports the letters delivered this week and his bike parts, Mo the new pages, Bea the café focus minutes, Juniper today's watered plants, and Rosie the treats in your jar. Biscuit says "Mrrp." The mayor gives a verdict (your best day, or "Citizen of the Week" for a 3-day streak), and everyone answers "Aye!" with hearts flying.
 
 **iPad**
 On iPad the whole town fits the screen and stays centred when the iPad turns. The café and greenhouse fill the screen edge to edge, carrying their walls, floor, lights and counter on past the original room. Strict mode keeps the phone's layout along the bottom with more cosy wall above, and shows the desk as it is when the iPad is already held sideways. Shop cards open centred instead of stretching.
@@ -129,7 +132,7 @@ mossbrook.json
 
 ```
 ├─ Mossbrook/           App: store, models, town, café, library, post office,
-│                       greenhouse, bakery, town hall, strict mode, tour,
+│                       greenhouse, bakery, Old Oak town meeting, strict mode, tour,
 │                       settings, iCloud sync, music, renderers
 ├─ MossbrookWidgets/    Widget extension and Live Activity
 ├─ Shared/              Pixel art, theme, plants, widget views and snapshot,

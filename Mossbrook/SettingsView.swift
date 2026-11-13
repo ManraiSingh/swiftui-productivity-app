@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var confirmDelete = false
     @State private var confirmDeleteAgain = false
     @State private var showPrivacy = false
+    @AppStorage(SoundFX.enabledKey) private var tapSounds = true
 
     var body: some View {
         NavigationStack {
@@ -36,6 +37,27 @@ struct SettingsView: View {
                                 openURL(url)
                             }
                         }
+                    }
+
+                    section("Sound") {
+                        Toggle(isOn: $tapSounds) {
+                            HStack(spacing: 12) {
+                                Image(systemName: tapSounds ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(Theme.ink)
+                                    .frame(width: 34, height: 34)
+                                    .background(Theme.gold.opacity(0.35))
+                                    .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Tap sounds").font(.pixel(14, .heavy)).foregroundStyle(Theme.ink)
+                                    Text("Little chimes, pops and quacks").font(.pixel(11, .medium)).foregroundStyle(Theme.muted)
+                                }
+                            }
+                        }
+                        .tint(Theme.leaf)
+                        .padding(12)
+                        .pixelBox(Theme.card)
+                        .onChange(of: tapSounds) { _, on in if on { SoundFX.shared.play(.toggle) } }
                     }
 
                     section("Town") {

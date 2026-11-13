@@ -92,7 +92,7 @@ enum CafeRenderer {
 
     static func draw(
         _ p: Painter, t: Double, rows: Int, phase: DayPhase, level: Int,
-        you: (point: CGPoint, walking: Bool, facingLeft: Bool), scene: CafeScene,
+        you: (point: CGPoint, walking: Bool, facingLeft: Bool), scene: CafeScene.Snapshot,
         fill: Double, visitor: Visitor, beaX: Double, onBreak: Bool = false, eating: Bool = false, breakT: Double = 0
     ) {
         room(p, t: t, rows: rows, phase: phase)

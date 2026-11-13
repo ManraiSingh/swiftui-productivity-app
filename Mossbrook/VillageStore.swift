@@ -14,6 +14,8 @@ final class VillageStore {
     private(set) var activeFocus: FocusSession?
     private(set) var focusMinutes = 0
     private(set) var focusSessions = 0
+    /// Sessions finished alongside others in the Together House.
+    private(set) var togetherSessions = 0
     private(set) var activeDays: Set<String> = []
     private(set) var letterDay: String?
     var weatherOverride: Weather?
@@ -179,7 +181,7 @@ final class VillageStore {
     // MARK: Bakery
 
     /// Rosie bakes one treat for every cup you finish and every letter you deliver.
-    var treatsBaked: Int { focusSessions + lettersDelivered }
+    var treatsBaked: Int { focusSessions + lettersDelivered + togetherSessions }
     private(set) var treatsSpent = 0
     private(set) var friendship: [String: Int] = [:]
     /// Deleted ids, so iCloud never brings them back from another device.
@@ -465,7 +467,7 @@ final class VillageStore {
 
     // MARK: Focus
 
-    func startFocus(title: String, drink: Drink, letterID: UUID?, seat: Int? = nil, minutes: Int? = nil, breakMinutes: Int = 0, rounds: Int = 1) {
+    func startFocus(title: String, drink: Drink, letterID: UUID?, seat: Int? = nil, minutes: Int? = nil, breakMinutes: Int = 0, rounds: Int = 1, endingAt: Date? = nil) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         var session = FocusSession(
             title: trimmed.isEmpty ? "Quiet work" : trimmed, minutes: max(1, minutes ?? drink.minutes),
@@ -473,6 +475,8 @@ final class VillageStore {
         )
         session.breakMinutes = max(0, breakMinutes)
         session.rounds = max(1, rounds)
+        // Line up with a shared clock (the Together House sessions) so everyone finishes at once.
+        if let endingAt { session.start = endingAt.addingTimeInterval(-TimeInterval(session.minutes * 60)) }
         activeFocus = session
         justFinished = nil
         save()
@@ -491,7 +495,10 @@ final class VillageStore {
             guard wait > 1 else { continue }
             let content = UNMutableNotificationContent()
             let last = k == phases.count - 1
-            if last {
+            if last && session.title == LiveFocus.togetherTitle {
+                content.title = "Session done, everyone! 🍪"
+                content.body = "You finished \(count(session.minutes, "minute")) together. Rosie baked you a bonus treat."
+            } else if last {
                 content.title = "Bea: last sip!"
                 content.body = "\(session.title) is done. \(count(session.totalWorkMinutes, "minute")) of focus."
             } else if phase.onBreak {
@@ -522,40 +529,46 @@ final class VillageStore {
             let at = s.end
             let fresh = now.timeIntervalSince(at) < 8
             if s.onBreak {
-                var next = s
-                next.onBreak = false
-                next.round += 1
-                next.start = at
-                activeFocus = next
-                if fresh {
-                    toast = Toast(speaker: .bea, text: "Break's over! Round \(next.round) of \(next.rounds).")
-                    rang = true
+                if s.round < s.rounds {
+                    var next = s
+                    next.onBreak = false
+                    next.round += 1
+                    next.start = at
+                    activeFocus = next
+                    if fresh {
+                        toast = Toast(speaker: .bea, text: "Break's over! Round \(next.round) of \(next.rounds).")
+                        rang = true
+                    }
+                } else {
+                    // The break after the last round is over: now the session is done.
+                    finish(s, fresh: fresh)
+                    if fresh { rang = true }
                 }
             } else {
                 focusMinutes += s.minutes
                 focusSessions += 1
-                if s.round < s.rounds {
+                if s.breakMinutes > 0 {
+                    // A break follows every round, the last one too.
                     var next = s
-                    if s.breakMinutes > 0 { next.onBreak = true } else { next.round += 1 }
+                    next.onBreak = true
                     next.start = at
                     activeFocus = next
                     if fresh {
-                        toast = Toast(speaker: .bea, text: next.onBreak ? "Break time! Come say hi." : "Round \(next.round) of \(next.rounds)!")
+                        toast = Toast(speaker: .bea, text: "Break time! Come say hi.")
+                        rang = true
+                    }
+                } else if s.round < s.rounds {
+                    var next = s
+                    next.round += 1
+                    next.start = at
+                    activeFocus = next
+                    if fresh {
+                        toast = Toast(speaker: .bea, text: "Round \(next.round) of \(next.rounds)!")
                         rang = true
                     }
                 } else {
-                    activeFocus = nil
-                    justFinished = s
-                    save()
-                    markActive()
-                    autoWater(.focus)
+                    finish(s, fresh: fresh)
                     if fresh { rang = true }
-                    if let id = s.letterID, let letter = letters.first(where: { $0.id == id }), !letter.done {
-                        deliver(letter)
-                    } else {
-                        toast = Toast(speaker: .bea, text: "Last sip! +\(count(s.totalWorkMinutes, "minute")) of focus.")
-                        checkStory()
-                    }
                 }
             }
         }
@@ -567,8 +580,33 @@ final class VillageStore {
 
     func completeFocus() { advanceFocus() }
 
+    /// The whole session is over: bank it, deliver its letter, and let Bea say goodbye.
+    private func finish(_ s: FocusSession, fresh: Bool) {
+        activeFocus = nil
+        justFinished = s
+        // Finishing a Together House session with others bakes a bonus treat.
+        if s.title == LiveFocus.togetherTitle { finishedTogether(at: s.end) }
+        save()
+        markActive()
+        autoWater(.focus)
+        if let id = s.letterID, let letter = letters.first(where: { $0.id == id }), !letter.done {
+            deliver(letter)
+        } else {
+            toast = Toast(speaker: .bea, text: "Last sip! +\(count(s.totalWorkMinutes, "minute")) of focus.")
+            checkStory()
+        }
+    }
+
     func skipBreak() {
         guard var s = activeFocus, s.onBreak else { return }
+        guard s.round < s.rounds else {
+            // Skipping the final break just ends the session.
+            cancelAlarms(s)
+            finish(s, fresh: true)
+            save()
+            LiveFocus.sync(nil)
+            return
+        }
         s.onBreak = false
         s.round += 1
         s.start = Date()
@@ -576,6 +614,35 @@ final class VillageStore {
         save()
         scheduleAlarms(s)
         LiveFocus.sync(s)
+    }
+
+    // MARK: Together House streak
+
+    private static let rowKey = "togetherRow", rowEndKey = "togetherRowEnd"
+
+    /// Shared sessions finished back to back. Stays alive through the break and the next session.
+    var togetherRow: Int {
+        let d = UserDefaults.standard
+        guard let end = d.object(forKey: Self.rowEndKey) as? Date,
+              Date().timeIntervalSince(end) < TogetherSchedule.length else { return 0 }
+        return d.integer(forKey: Self.rowKey)
+    }
+
+    private func finishedTogether(at end: Date) {
+        togetherSessions += 1
+        let d = UserDefaults.standard
+        let last = d.object(forKey: Self.rowEndKey) as? Date
+        let back2back = last.map { end.timeIntervalSince($0) <= TogetherSchedule.length + 120 && end > $0 } ?? false
+        d.set(back2back ? d.integer(forKey: Self.rowKey) + 1 : 1, forKey: Self.rowKey)
+        d.set(end, forKey: Self.rowEndKey)
+    }
+
+    /// Stops the current timer without a goodbye, when it's being replaced by another one.
+    func cancelFocusQuietly() {
+        guard let session = activeFocus else { return }
+        activeFocus = nil
+        save()
+        cancelAlarms(session)
     }
 
     func cancelFocus() {
@@ -703,7 +770,7 @@ final class VillageStore {
         let now = Date()
         for id in letters.map(\.id) + pages.map(\.id) + habits.map(\.id) { deleted[id.uuidString] = now }
         letters = []; pages = []; seenEvents = []; activeFocus = nil
-        focusMinutes = 0; focusSessions = 0; activeDays = []; letterDay = nil
+        focusMinutes = 0; focusSessions = 0; togetherSessions = 0; activeDays = []; letterDay = nil
         habits = []; treatsSpent = 0; friendship = [:]
         justFinished = nil; pendingEvent = nil; toast = nil
         for key in ["tourDone", "phaseOverride", "habitReminder", "strictIntroSeen", "strictTipSeen", StrictActivity.storageKey] {
@@ -772,6 +839,7 @@ final class VillageStore {
         letterDay = saved.letterDay
         habits = saved.habits
         treatsSpent = saved.treatsSpent
+        togetherSessions = saved.togetherSessions
         friendship = saved.friendship
         deleted = saved.deleted
         // Count days from work done before the streak existed.
@@ -786,6 +854,7 @@ final class VillageStore {
             activeDays: Array(activeDays), letterDay: letterDay, habits: habits
         )
         data.treatsSpent = treatsSpent
+        data.togetherSessions = togetherSessions
         data.friendship = friendship
         data.deleted = deleted
         return data
@@ -813,6 +882,7 @@ final class VillageStore {
         letterDay = merged.letterDay
         habits = merged.habits
         treatsSpent = merged.treatsSpent
+        togetherSessions = merged.togetherSessions
         friendship = merged.friendship
         deleted = merged.deleted
         NoteImages.syncWithCloud()

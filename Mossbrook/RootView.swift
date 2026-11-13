@@ -12,22 +12,27 @@ struct RootView: View {
     @State private var showGreenhouse = false
     @State private var showStudyHall = false
     @Environment(\.displayScale) private var displayScale
-    /// Current zoom (1 = the normal view) and where the world's top edge is on screen, for the sky behind.
-    @State private var zoom: CGFloat = 1
-    @State private var worldTop: CGFloat = 0
-    @State private var mapOffset: CGPoint = .zero
+    /// Kept in its own object so scrolling only redraws the sky behind the map, not this whole screen.
+    @State private var camera = MapCamera()
+    /// The opening scene, shown once per launch while the town gets ready underneath.
+    @State private var showSplash = !ProcessInfo.processInfo.arguments.contains("-noSplash")
     @State private var tourStep = 0
     /// The tour opens on the whole town before zooming in to the first villager.
     @State private var tourIntro = true
 
     /// A full screen or a tall sheet is over the town, so there's no need to keep animating it.
     private var townCovered: Bool { showCafe || showGreenhouse || showStudyHall || openVillager != nil || showTownHall }
+    /// Follows `townCovered`, but only once a screen has finished sliding in or out, so pausing or
+    /// waking the town never lands in the same frame as the slide (that frame used to stutter).
+    @State private var townPaused = false
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 let base = defaultDots(geo.size.width) / displayScale
-                SkyBackdrop(phase: store.phase, weather: store.weather, pixel: base * zoom, horizon: worldTop, paused: townCovered)
+                // No sky beyond the world: the map never zooms out past the normal view, so the town
+                // fills the screen. A plain colour sits behind it just in case (a very tall iPad).
+                Color(hex: store.phase == .night ? 0x161B3A : (store.phase == .dusk ? 0x8E6FA6 : 0x9ED6EC))
                     .ignoresSafeArea()
                 ZoomableWorld(
                     contentSize: CGSize(width: CGFloat(VillageLayout.worldWidth) * base, height: CGFloat(VillageLayout.worldHeight) * base),
@@ -35,12 +40,12 @@ struct RootView: View {
                     maxZoom: 2,
                     snapStep: 1 / defaultDots(geo.size.width),
                     bottomInset: VillageDrawer.collapsedHeight - 20,
-                    focus: tourFocus(base: base),
-                    focusZoom: store.showTour ? (tourIntro ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : 1) : nil,
+                    focus: tourFocus(base: base) ?? (Self.debugZoomOut ? CGPoint(x: CGFloat(VillageLayout.worldWidth) * base / 2, y: CGFloat(VillageLayout.worldHeight) * base * 0.35) : nil),
+                    focusZoom: store.showTour ? (tourIntro ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : 1)
+                        : (Self.debugZoomOut ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : nil),
                     onChange: { z, offset in
-                        zoom = z
-                        worldTop = -offset.y
-                        mapOffset = offset
+                        camera.zoom = z
+                        camera.offset = offset
                     },
                     onBackgroundTap: { if drawerOpen { withAnimation(.snappy) { drawerOpen = false } } }
                 ) {
@@ -50,7 +55,7 @@ struct RootView: View {
                         onMailbox: { showLetter = true },
                         onTownHall: { showTownHall = true },
                         onStudyHall: { showStudyHall = true },
-                        paused: townCovered
+                        paused: townPaused
                     )
                     .environment(store)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -71,12 +76,12 @@ struct RootView: View {
                     TownTourOverlay(
                         step: tourStep,
                         screenRect: { r in
-                            let k = base * zoom
+                            let k = base * camera.zoom
                             let m = CGFloat(VillageLayout.margin)
                             // r.origin is the building's centre in town art pixels.
                             return CGRect(
-                                x: (r.minX - r.width / 2 + m) * k - mapOffset.x,
-                                y: (r.minY - r.height / 2) * k - mapOffset.y,
+                                x: (r.minX - r.width / 2 + m) * k - camera.offset.x,
+                                y: (r.minY - r.height / 2) * k - camera.offset.y,
                                 width: r.width * k, height: r.height * k
                             )
                         },
@@ -99,6 +104,15 @@ struct RootView: View {
             }
         }
         .villageOverlays()
+        .overlay {
+            if showSplash {
+                SplashView(phase: store.phase) {
+                    withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
+                }
+                .transition(.opacity)
+                .zIndex(10)
+            }
+        }
         .sheet(item: $openVillager) { villager in
             switch villager {
             case .pip: PostOfficeView()
@@ -114,8 +128,8 @@ struct RootView: View {
         .sheet(isPresented: $showLetter) {
             DailyLetterView()
         }
-        .sheet(isPresented: $showTownHall) {
-            TownHallView()
+        .fullScreenCover(isPresented: $showTownHall) {
+            TownMeetingView()
         }
         .fullScreenCover(isPresented: $showCafe) {
             CafeView()
@@ -126,10 +140,32 @@ struct RootView: View {
         .fullScreenCover(isPresented: $showStudyHall) {
             StudyHallView()
         }
+        .onOpenURL { url in
+            // The Together House widget.
+            if url.host == "together" { showStudyHall = true }
+        }
         .onAppear {
+            QuietNotifications.openTogether = { showStudyHall = true }
+            #if DEBUG
+            // Screenshot shortcuts: jump straight into a screen.
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-openHall") { showStudyHall = true }
+            if args.contains("-openMeeting") { showTownHall = true }
+            if args.contains("-openCafe") { showCafe = true }
+            if args.contains("-openGreenhouse") { showGreenhouse = true }
+            #endif
+            SoundFX.installTapListener()
             store.applyWidgetDeliveries()
             store.resumeFocusIfNeeded()
             store.checkStory()
+        }
+        .onChange(of: store.lettersDelivered) { old, new in if new > old { SoundFX.shared.play(.deliver) } }
+        .onChange(of: store.habitsDoneToday) { old, new in if new > old { SoundFX.shared.play(.water) } }
+        .onChange(of: townCovered) { _, covered in
+            Task {
+                try? await Task.sleep(for: .milliseconds(covered ? 650 : 550))
+                if townCovered == covered { townPaused = covered }
+            }
         }
         .onChange(of: scenePhase) {
             if scenePhase == .active {
@@ -138,6 +174,14 @@ struct RootView: View {
                 NoteImages.syncWithCloud()
                 LiveFocus.publish(store)
                 store.resumeFocusIfNeeded()
+            }
+        }
+        .task {
+            // Safety net: the timer task below can miss its moment (the device slept, the app was
+            // suspended), so every few seconds make sure no finished session is left hanging at 00:00.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if let s = store.activeFocus, s.end <= .now { store.advanceFocus() }
             }
         }
         .task(id: focusKey) {
@@ -160,9 +204,17 @@ struct RootView: View {
         return max(1, (width / columns * displayScale).rounded(.down))
     }
 
-    /// Zoomed out as far as the whole town fits across the screen; zoomed in to about twice the normal size.
+    /// Debug builds: launch with -zoomOut to open the map fully zoomed out, for checking the edges of the world.
+    #if DEBUG
+    static let debugZoomOut = ProcessInfo.processInfo.arguments.contains("-zoomOut")
+    #else
+    static let debugZoomOut = false
+    #endif
+
+    /// The normal view is as far out as the map goes (so the world always fills the screen and
+    /// there's no empty sky above it); zoomed in to about twice the normal size.
     private func dotRange(_ width: CGFloat) -> (CGFloat, CGFloat) {
-        let lo = max(1, (width * displayScale / CGFloat(VillageLayout.width + 24)).rounded(.down))
+        let lo = defaultDots(width)
         return (lo, defaultDots(width) * 2)
     }
 
@@ -221,6 +273,7 @@ struct VillageHeader: View {
                     #if DEBUG
                     .onLongPressGesture { gallery = true }
                     .fullScreenCover(isPresented: $gallery) { WidgetGallery() }
+                    .onAppear { if ProcessInfo.processInfo.arguments.contains("-openGallery") { gallery = true } }
                     #endif
                 Text(store.bikeFixed && store.bookDone ? "SEASON 1 · COMPLETE" : "SEASON 1 · WAKE THE VILLAGE")
                     .font(.pixel(10))
@@ -634,4 +687,12 @@ struct PageCard: View {
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
         .pixelBox(Theme.card)
     }
+}
+
+/// How far the map is zoomed and scrolled. It changes every frame while you drag, so only the
+/// views that really need it read it (the sky behind the map, the tour highlight).
+@Observable
+final class MapCamera {
+    var zoom: CGFloat = 1
+    var offset: CGPoint = .zero
 }

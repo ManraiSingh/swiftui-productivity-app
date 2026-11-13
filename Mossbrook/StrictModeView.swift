@@ -100,13 +100,14 @@ struct StrictDesk: View {
                 let drink = session.flatMap { Drink(rawValue: $0.drink) } ?? .espresso
 
                 ZStack(alignment: .topLeading) {
-                    Canvas { ctx, size in
+                    let phase = store.phase, headphones = music.isPlaying, activity = activity
+                    PixelCanvas(cols: 160, rows: allRows, s: s, frame: t) { p in
                         if lift > 0 {
-                            StrictRenderer.upperWall(Painter(ctx: ctx, s: s), t: t, height: lift + 1, phase: store.phase)
+                            StrictRenderer.upperWall(p, t: t, height: lift + 1, phase: phase)
                         }
                         StrictRenderer.draw(
-                            Painter(ctx: ctx, s: s).shifted(dy: lift), t: t, rows: rows, phase: store.phase,
-                            remaining: remaining, fill: fill, drink: drink, headphones: music.isPlaying,
+                            p.shifted(dy: lift), t: t, rows: rows, phase: phase,
+                            remaining: remaining, fill: fill, drink: drink, headphones: headphones,
                             activity: activity
                         )
                     }

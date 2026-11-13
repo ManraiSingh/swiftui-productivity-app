@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 // MARK: - Looks
 
@@ -66,6 +67,7 @@ struct StudyHallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var hall = HallService.shared
+    @State private var reminders = TogetherReminders.shared
     @State private var motion = RoomMotion()
     @AppStorage("hallName") private var savedName = ""
     @AppStorage("hallLook") private var look = 0
@@ -81,17 +83,32 @@ struct StudyHallView: View {
     @State private var order: Order?
 
     struct Order: Equatable {
-        enum Step: Equatable { case walking, preparing(Date) }
+        /// Walk to the counter, Rosie bakes it, then it's yours to carry to any free table.
+        enum Step: Equatable { case walking, preparing(Date), ready }
         let food: Int
         var step: Step
     }
     @FocusState private var typing: Bool
+    /// What's highlighted on Rosie's menu before you order.
+    @State private var picking = 0
+    /// The shared session you're in, or saving a seat for.
+    @State private var joinedSlot: TogetherSchedule.Slot?
+    /// When the last shared session you were in ended, for the little party.
+    @State private var partyAt: Date?
+    /// The little "you did it" card after a shared session, with how many people you focused with.
+    @State private var result: SessionResult?
 
-    enum Tray { case emote, say, eat }
+    struct SessionResult: Equatable {
+        let people: Int
+        let minutes: Int
+        let total: Int
+    }
+
+    enum Tray { case react, menu }
 
     var body: some View {
         GeometryReader { geo in
-            let bar: CGFloat = hall.joined ? 116 : 0
+            let bar: CGFloat = hall.joined ? 150 : 0
             let topRoom: CGFloat = 50
             let s = max(0.5, min(geo.size.width / CGFloat(TogetherRoom.width), max(geo.size.height - bar - topRoom, 1) / CGFloat(TogetherRoom.height)))
             let oy = Int((topRoom / s).rounded())
@@ -102,13 +119,18 @@ struct StudyHallView: View {
             TimelineView(.animation(minimumInterval: 1.0 / 20)) { timeline in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 let scene = people(now: now)
+                let drawn = scene.map(\.drawn)
+                let quiet = TogetherSchedule.slot(at: timeline.date).focusing(at: timeline.date)
+                let party = partyAge(at: timeline.date)
+                let busy = rosieBusy(scene)
+                let petted = Date().timeIntervalSince(catPetted) < 2.5
                 ZStack(alignment: .topLeading) {
-                    Canvas { ctx, _ in
+                    let phase = store.phase, weather = store.weather
+                    PixelCanvas(cols: cols, rows: rows, s: s, frame: now) { p in
                         TogetherRenderer.draw(
-                            Painter(ctx: ctx, s: s), t: now, cols: cols, rows: rows, ox: ox, oy: oy,
-                            phase: store.phase, weather: store.weather, people: scene.map(\.drawn),
-                            catHeart: Date().timeIntervalSince(catPetted) < 2.5,
-                            rosieBusy: scene.contains { !$0.drawn.walking && $0.drawn.seat == nil && abs($0.drawn.point.x - TogetherRoom.orderSpot.x) < 3 && abs($0.drawn.point.y - TogetherRoom.orderSpot.y) < 1 && $0.visitor.food >= 0 && ($0.mine ? order != nil : true) }
+                            p, t: now, cols: cols, rows: rows, ox: ox, oy: oy,
+                            phase: phase, weather: weather, people: drawn,
+                            catHeart: petted, rosieBusy: busy, quiet: quiet, party: party
                         )
                     }
                     .contentShape(Rectangle())
@@ -119,14 +141,25 @@ struct StudyHallView: View {
                     ForEach(scene, id: \.id) { item in
                         let x = (CGFloat(ox) + item.drawn.centerX) * s
                         let top = (item.drawn.headTop + Double(oy)) * s
-                        nameTag(item.name, detail: item.detail, mine: item.mine)
+                        // Desks sit close together, so seated workers show just the first word of their name.
+                        nameTag(item.drawn.seat?.kind == .work ? String(item.name.split(separator: " ").first ?? Substring(item.name)) : item.name, detail: item.crowned ? "×\(item.visitor.row)" : item.detail, mine: item.mine, crowned: item.crowned)
                             .position(x: x, y: top - 3 * s)
+                            .zIndex(item.crowned ? 2 : (item.mine ? 1 : 0))
                         if let line = item.say {
                             SpeechBubble(text: line, size: 10)
                                 .fixedSize()
                                 .position(x: min(max(x, 70), geo.size.width - 70), y: top - 9 * s - 16)
                                 .allowsHitTesting(false)
                         }
+                    }
+                    if TogetherSchedule.slot(at: timeline.date).focusing(at: timeline.date) {
+                        Text("Shh… focusing")
+                            .font(.pixel(9, .heavy))
+                            .foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .pixelBox(Color(hex: 0xFFE38A), shadow: 1)
+                            .position(x: (CGFloat(ox) + 64) * s, y: CGFloat(TogetherRoom.wallBottom + 8 + oy) * s)
+                            .allowsHitTesting(false)
                     }
                     if timeline.date.timeIntervalSince(rosieAt) < 4 {
                         SpeechBubble(text: rosieLine, size: 10)
@@ -152,14 +185,27 @@ struct StudyHallView: View {
         .background(Color(hex: 0x3A2218).ignoresSafeArea())
         .overlay(alignment: .topTrailing) { closeButton }
         .overlay { if !rulesSeen { rules } }
+        #if DEBUG
+        .overlay { if ProcessInfo.processInfo.arguments.contains("-hallShareCard") { SessionShareCard(people: 9, minutes: 25, total: 3, look: look, name: savedName) } }
+        #endif
         .environment(\.colorScheme, .light)
         .preferredColorScheme(.dark)
         .sensoryFeedback(.selection, trigger: lastBubble)
         .onAppear {
+            if NameRules.problem(savedName) != nil || savedName.isEmpty { savedName = CozyNames.random(); look = Int.random(in: 0..<HallLooks.all.count) }
             draft = savedName
             hall.open()
             syncStatus()
             rosieAt = .now
+            #if DEBUG
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-hallJoin") && !hall.joined { comeIn() }
+            if args.contains("-hallMenu") { Task { try? await Task.sleep(for: .seconds(2)); picking = 4; tray = .menu } }
+            if args.contains("-hallReady") { order = Order(food: 4, step: .ready) }
+            if args.contains("-hallResult") { result = SessionResult(people: 9, minutes: 25, total: 3); partyAt = .now }
+            if args.contains("-hallSession") { Task { try? await Task.sleep(for: .seconds(1.5)); joinSession() } }
+            if args.contains("-hallParty") { Task { while !Task.isCancelled { partyAt = .now; try? await Task.sleep(for: .seconds(5)) } } }
+            #endif
         }
         .task {
             // Rosie calls out now and then.
@@ -179,6 +225,10 @@ struct StudyHallView: View {
         }
         .onDisappear { hall.close(keepSeat: store.activeFocus.map { !$0.onBreak } ?? false) }
         .onChange(of: focusKey) { syncStatus() }
+        .onChange(of: hall.visible.count) {
+            TogetherHouseInfo.save(count: hall.visible.count + (hall.joined ? 1 : 0))
+            WidgetCenter.shared.reloadTimelines(ofKind: "TogetherWidget")
+        }
         .confirmationDialog(picked?.name ?? "", isPresented: Binding(get: { picked != nil }, set: { if !$0 { picked = nil } }), titleVisibility: .visible) {
             if let person = picked {
                 if hall.joined {
@@ -199,6 +249,22 @@ struct StudyHallView: View {
         return max(window?.safeAreaInsets.bottom ?? 0, 12) + 4
     }
 
+    private func partyAge(at date: Date) -> Double? {
+        guard let partyAt else { return nil }
+        let age = date.timeIntervalSince(partyAt)
+        return age < 4.5 ? age : nil
+    }
+
+    /// Rosie looks busy while someone is waiting at the counter for their order.
+    private func rosieBusy(_ scene: [Item]) -> Bool {
+        scene.contains { item in
+            let d = item.drawn
+            guard !d.walking, d.seat == nil, item.visitor.food >= 0 else { return false }
+            guard abs(d.point.x - TogetherRoom.orderSpot.x) < 3, abs(d.point.y - TogetherRoom.orderSpot.y) < 1 else { return false }
+            return item.mine ? order != nil : true
+        }
+    }
+
     private func rosie(_ line: String) {
         rosieLine = line
         rosieAt = .now
@@ -214,12 +280,27 @@ struct StudyHallView: View {
         let say: String?
         let drawn: TogetherRenderer.Person
         let visitor: HallVisitor
+        var crowned = false
+    }
+
+    /// Who wears the crown: the most shared sessions in a row, at least two.
+    private var crownID: String? {
+        var all = hall.visible
+        if let me = hall.me { all.append(me) }
+        guard let top = all.max(by: { ($0.row, $1.id) < ($1.row, $0.id) }), top.row >= 2 else { return nil }
+        return top.id
+    }
+
+    private var crownHolder: HallVisitor? {
+        guard let id = crownID else { return nil }
+        return id == hall.me?.id ? hall.me : hall.visible.first { $0.id == id }
     }
 
     private func people(now: Double) -> [Item] {
         var list = Array(hall.visible.prefix(24))
         if let me = hall.me { list.append(me) }
         var taken: Set<String> = []
+        let crown = crownID
         return list.enumerated().map { i, v in
             let target = CGPoint(x: v.x, y: v.y)
             let place = motion.place(v.id, target: target, now: now)
@@ -230,8 +311,10 @@ struct StudyHallView: View {
                 taken.insert(spot.id)
             }
             let mine = v.id == hall.me?.id
-            let sayIndex = motion.say(v, now: now)
-            let emote = sayIndex == nil ? motion.emote(v, now: now) : nil
+            // Quiet hours: nobody at a desk pops bubbles while the session runs.
+            let hushed = seat?.kind == .work && TogetherSchedule.slot(at: Date()).focusing(at: Date())
+            let sayIndex = hushed ? nil : motion.say(v, now: now)
+            let emote = sayIndex == nil && !hushed ? motion.emote(v, now: now) : nil
             let seed = v.id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) % 9973 }
             let heading = TogetherRoom.spot(v.spot)
             let drawn = TogetherRenderer.Person(
@@ -241,7 +324,8 @@ struct StudyHallView: View {
                 seatedFor: motion.seatedFor(v.id, key: seat.map { "\($0.id)-\(v.food)" }, now: now), seed: seed
             )
             let line = sayIndex.flatMap { TogetherEmote.phrases.indices.contains($0) ? TogetherEmote.phrases[$0] : nil }
-            return Item(id: v.id, name: mine ? savedName : v.name, detail: detail(v), mine: mine, say: line, drawn: drawn, visitor: v)
+            return Item(id: v.id, name: mine ? savedName : v.name, detail: detail(v), mine: mine, say: line, drawn: drawn, visitor: v,
+                        crowned: v.id == crown)
         }
     }
 
@@ -265,12 +349,21 @@ struct StudyHallView: View {
         }
         guard hall.joined else { return }
         if let item = scene.first(where: { $0.mine }), hitRect(item.drawn).contains(g) {
-            withAnimation(.snappy) { tray = tray == .emote ? nil : .emote }
+            withAnimation(.snappy) { tray = tray == .react ? nil : .react }
             return
         }
-        if TogetherRoom.counter.contains(g) { withAnimation(.snappy) { tray = .eat }; return }
+        if TogetherRoom.counter.contains(g) { openMenu(); return }
         if let spot = TogetherRoom.spots.first(where: { $0.hit.contains(g) }) {
-            if spot.kind == .eat { withAnimation(.snappy) { tray = .eat }; return }
+            if spot.kind == .eat {
+                // Carrying something? This is your table. Otherwise, the menu first.
+                if let ready = order, ready.step == .ready {
+                    order = nil
+                    sit(spot, food: ready.food)
+                } else {
+                    openMenu()
+                }
+                return
+            }
             order = nil
             sit(spot)
             return
@@ -301,7 +394,81 @@ struct StudyHallView: View {
     }
 
     /// Runs a few times a second to move your order along.
+    private func tickSession() {
+        let now = Date()
+        hall.setRow(store.togetherRow)
+        guard let slot = joinedSlot else { refreshLiveCount(); return }
+        if store.activeFocus == nil && now >= slot.start && now < slot.focusEnd && myKind == .work {
+            startSession(slot)
+        }
+        refreshLiveCount()
+        if now >= slot.focusEnd {
+            joinedSlot = nil
+            // Only party if you were actually focusing in this session.
+            if store.justFinished?.title == LiveFocus.togetherTitle {
+                partyAt = now
+                withAnimation(.snappy) {
+                    result = SessionResult(people: max(1, lastCount), minutes: store.justFinished?.minutes ?? TogetherSchedule.focusMinutes,
+                                           total: store.togetherSessions)
+                }
+                SoundFX.shared.play(.star, volume: 0.7)
+                rosie(["Session done! Treats all round 🍪", "Everyone did it! Fresh cookies!", "Lovely work, all of you!"].randomElement()!)
+            }
+        }
+    }
+
+    private func startSession(_ slot: TogetherSchedule.Slot) {
+        let left = slot.focusEnd.timeIntervalSinceNow
+        guard left > 30 else { return }
+        lastCount = 1
+        LiveFocus.togetherPeople = max(1, sessionCount(slot) + 1)
+        result = nil
+        store.startFocus(title: LiveFocus.togetherTitle, drink: .espresso, letterID: nil,
+                         minutes: Int((left / 60).rounded(.up)), endingAt: slot.focusEnd)
+        syncStatus()
+    }
+
+    /// Join the session that's running, or save a desk for the next one.
+    private func joinSession() {
+        let now = Date()
+        let slot = TogetherSchedule.upcoming(after: now, includeRunning: true)
+        joinedSlot = slot
+        order = nil
+        if myKind != .work { go(.work) }
+        if slot.focusing(at: now) {
+            if store.activeFocus != nil { store.cancelFocusQuietly() }
+            startSession(slot)
+            rosie("Pull up a chair, the session's on!")
+        } else {
+            rosie("Seat saved! We start at \(TogetherSchedule.label(slot.start)).")
+        }
+        SoundFX.shared.play(.open, volume: 0.6)
+    }
+
+    /// The head count during your last session, remembered for the result card.
+    @State private var lastCount = 1
+
+    /// Keeps the Live Activity and Dynamic Island showing how many people are focusing with you.
+    private func refreshLiveCount() {
+        let slot = TogetherSchedule.upcoming(after: .now, includeRunning: true)
+        guard slot.focusing(at: .now), let f = store.activeFocus, f.title == LiveFocus.togetherTitle else { return }
+        let n = sessionCount(slot)
+        lastCount = max(lastCount, n)
+        if n != LiveFocus.togetherPeople {
+            LiveFocus.togetherPeople = n
+            LiveFocus.sync(f)
+        }
+    }
+
+    /// How many people are in the session that's running now (including you).
+    private func sessionCount(_ slot: TogetherSchedule.Slot) -> Int {
+        let others = hall.visible.filter { $0.status == .focus && abs(($0.until ?? .distantPast).timeIntervalSince(slot.focusEnd)) < 120 }.count
+        let mine = store.activeFocus.map { abs($0.end.timeIntervalSince(slot.focusEnd)) < 120 } ?? false
+        return others + (mine ? 1 : 0)
+    }
+
     private func tickOrder() {
+        tickSession()
         guard var current = order, let me = hall.me else { return }
         let now = Date.timeIntervalSinceReferenceDate
         switch current.step {
@@ -314,11 +481,26 @@ struct StudyHallView: View {
             }
         case .preparing(let since):
             if Date().timeIntervalSince(since) > 2.4 {
-                order = nil
-                rosie(["Here you go, dear!", "Enjoy!", "Fresh from the oven!"].randomElement()!)
-                go(.eat, food: current.food)
+                current.step = .ready
+                withAnimation(.snappy) { order = current }
+                rosie(["Here you go, dear!", "Fresh from the oven!", "All yours. Find a cozy table!"].randomElement()!)
+                SoundFX.shared.play(.deliver, volume: 0.6)
             }
+        case .ready:
+            break
         }
+    }
+
+    private func openMenu() {
+        if let order, order.step != .ready { return }
+        withAnimation(.snappy) { tray = .menu }
+    }
+
+    /// Carry your snack to the nearest free café table.
+    private func sitWithSnack() {
+        guard let ready = order, ready.step == .ready else { return }
+        order = nil
+        go(.eat, food: ready.food)
     }
 
     private func go(_ kind: TogetherRoom.Kind, food: Int = 0) {
@@ -367,8 +549,9 @@ struct StudyHallView: View {
 
     // MARK: Pieces
 
-    private func nameTag(_ name: String, detail: String?, mine: Bool) -> some View {
+    private func nameTag(_ name: String, detail: String?, mine: Bool, crowned: Bool = false) -> some View {
         HStack(spacing: 3) {
+            if crowned { SpriteView(sprite: Self.crown, pixel: 1.5) }
             Text(name).font(.pixel(9, .heavy)).foregroundStyle(Theme.ink)
             if let detail { Text(detail).font(.pixel(8, .bold)).foregroundStyle(Theme.muted) }
         }
@@ -383,26 +566,48 @@ struct StudyHallView: View {
 
     private var header: some View {
         let n = hall.visible.count + (hall.joined ? 1 : 0)
-        return VStack(alignment: .leading, spacing: 4) {
+        let live: Bool = { if case .ready = hall.phase { return true }; return false }()
+        return HStack(spacing: 0) {
             Text("TOGETHER HOUSE")
-                .font(.pixel(14, .heavy))
+                .font(.pixel(13, .heavy))
                 .foregroundStyle(Theme.ink)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .pixelBox(Color(hex: 0xF7B7CF), shadow: 2)
-            Group {
-                switch hall.phase {
-                case .ready, .idle: Text(n == 0 ? "Just the cat for now" : count(n, "person", plural: "people") + " here right now")
-                case .opening: Text("Opening the door…")
-                case .offline: Text("Can't reach the house")
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Self.pink)
+            Rectangle().fill(Theme.ink).frame(width: 2)
+            HStack(spacing: 5) {
+                Rectangle()
+                    .fill(live ? Color(hex: 0x6CC28A) : Theme.muted)
+                    .frame(width: 6, height: 6)
+                Group {
+                    switch hall.phase {
+                    case .ready, .idle: Text(n == 0 ? "just the cat" : "\(n) here")
+                    case .opening: Text("opening…")
+                    case .offline: Text("offline")
+                    }
                 }
+                .font(.pixel(11, .heavy))
+                .foregroundStyle(Theme.ink)
             }
-            .font(.pixel(10, .bold))
-            .foregroundStyle(Theme.ink)
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .pixelBox(Theme.card, shadow: 2)
+            .padding(.horizontal, 8)
+            .background(Theme.card)
+            Rectangle().fill(Theme.ink).frame(width: 2)
+            TimelineView(.periodic(from: .now, by: 1)) { tl in
+                let slot = TogetherSchedule.upcoming(after: tl.date, includeRunning: true)
+                let on = slot.focusing(at: tl.date)
+                Text(on ? "FOCUS \(FocusFormat.clock(slot.focusEnd.timeIntervalSince(tl.date)))" : "NEXT \(TogetherSchedule.label(slot.start))")
+                    .font(.pixel(11, .heavy))
+                    .foregroundStyle(Theme.ink)
+                    .monospacedDigit()
+                    .padding(.horizontal, 8)
+                    .frame(maxHeight: .infinity)
+                    .background(on ? Color(hex: 0xFFE38A) : Theme.cream)
+            }
         }
+        .fixedSize()
+        .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
+        .background(Rectangle().fill(Theme.ink).offset(x: 2, y: 2))
         .padding(.leading, 14)
-        .padding(.top, 6)
+        .padding(.top, 8)
     }
 
     private var closeButton: some View {
@@ -420,190 +625,440 @@ struct StudyHallView: View {
 
     // MARK: Controls
 
+    private static let pink = Color(hex: 0xF7B7CF)
+
+    /// A little gold crown for whoever has stayed the longest.
+    static let crown = Sprite([
+        "k.k.k.k",
+        "kykykyk",
+        "kyyryyk",
+        "kyyyyyk",
+        "kkkkkkk",
+    ], ["k": Color(hex: 0x2B2233), "y": Color(hex: 0xFFD54A), "r": Color(hex: 0xF06A86)])
+    private static let rose = Color(hex: 0xC2577A)
+
+    /// Like the café: one card that says what's happening right now, and a small bar for moving around.
     private var controls: some View {
         VStack(spacing: 8) {
-            if let tray {
-                trayView(tray).transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if TogetherRoom.spot(hall.me?.spot ?? "")?.kind == .work {
-                focusStrip
+            card
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .id(cardKey)
+            HStack(spacing: 6) {
+                barButton("laptopcomputer", "Work", on: myKind == .work) { go(.work) }
+                barButton("fork.knife", "Snack", on: tray == .menu || myKind == .eat) { tray == .menu ? close() : openMenu() }
+                barButton("sofa.fill", "Relax", on: myKind == .relax) { go(.relax) }
+                barButton("face.smiling.inverse", "React", on: tray == .react) { withAnimation(.snappy) { tray = tray == .react ? nil : .react } }
             }
-            HStack(spacing: 8) {
-                actionButton("laptopcomputer", "Work", color: Color(hex: 0xA9C8F5)) { go(.work) }
-                actionButton("fork.knife", "Eat", color: Color(hex: 0xF7B7CF), on: tray == .eat) { toggle(.eat) }
-                actionButton("sofa.fill", "Relax", color: Color(hex: 0x9CCFB8)) { go(.relax) }
-                actionButton("face.smiling.inverse", "Emote", color: Theme.gold, on: tray == .emote) { toggle(.emote) }
-                actionButton("text.bubble.fill", "Say", color: Color(hex: 0xE8D5F0), on: tray == .say) { toggle(.say) }
+        }
+        .animation(.snappy, value: cardKey)
+    }
+
+    private var myKind: TogetherRoom.Kind? { TogetherRoom.spot(hall.me?.spot ?? "")?.kind }
+
+    /// Changes whenever the card should swap, so it slides instead of jumping.
+    private var cardKey: String {
+        if result != nil && tray == nil { return "result" }
+        if let tray { return "tray-\(tray)" }
+        if let order {
+            switch order.step {
+            case .walking, .preparing: return "baking"
+            case .ready: return "ready"
+            }
+        }
+        return "at-\(myKind?.rawValue ?? "floor")-\(store.activeFocus != nil)-\(joinedSlot != nil)"
+    }
+
+    private func close() { withAnimation(.snappy) { tray = nil } }
+
+    @ViewBuilder private var card: some View {
+        if let result, tray == nil {
+            resultCard(result)
+        } else if tray == .menu {
+            menuCard
+        } else if tray == .react {
+            reactCard
+        } else if let order {
+            let food = TogetherFood.item(order.food)
+            if order.step == .ready {
+                hint(food.sprite, "Your \(food.name.lowercased()) is ready", "Tap a free café table to sit and enjoy it.",
+                     button: "Sit anywhere", action: sitWithSnack)
+            } else {
+                hint(Sprites.rosie, "Rosie is making your \(food.name.lowercased())…", food.blurb + ". Just a moment!") {
+                    BakingDots().frame(width: 34)
+                }
+            }
+        } else {
+            switch myKind {
+            case .work: deskCard
+            case .eat:
+                let food = TogetherFood.item(hall.me?.food ?? 0)
+                hint(food.sprite, "Enjoying your \(food.name.lowercased())", "Take your time. Rosie's always baking.",
+                     button: "Back to work") { go(.work) }
+            case .relax:
+                hint(Sprites.sleepyCat, "The cozy corner", "Rest your eyes for a bit. The cat approves.",
+                     button: "Back to work") { go(.work) }
+            case nil:
+                sessionCard
             }
         }
     }
 
-    private func toggle(_ t: Tray) {
-        withAnimation(.snappy) { tray = tray == t ? nil : t }
+    /// The café-style card: a sprite, a line or two, and at most one button.
+    private func hint<Accessory: View>(_ sprite: Sprite, _ title: String, _ detail: String, button: String? = nil,
+                                        action: (() -> Void)? = nil, @ViewBuilder accessory: () -> Accessory = { EmptyView() }) -> some View {
+        hintCard(sprite, title, detail, button: button, action: action, accessory: accessory)
     }
 
-    private func actionButton(_ symbol: String, _ label: String, color: Color, on: Bool = false, action: @escaping () -> Void) -> some View {
+    /// Same card, with the accessory given as the trailing closure (no button).
+    private func hint<Accessory: View>(_ sprite: Sprite, _ title: String, _ detail: String,
+                                        @ViewBuilder trailing accessory: () -> Accessory) -> some View {
+        hintCard(sprite, title, detail, button: nil, action: nil, accessory: accessory)
+    }
+
+    private func hintCard<Accessory: View>(_ sprite: Sprite, _ title: String, _ detail: String, button: String?,
+                                            action: (() -> Void)?, accessory: () -> Accessory) -> some View {
+        HStack(spacing: 12) {
+            SpriteView(sprite: sprite, pixel: 2.5)
+                .frame(width: 40)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.pixel(14, .heavy)).foregroundStyle(Theme.ink)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text(detail).font(.pixel(11, .medium)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            accessory()
+            if let button, let action {
+                Button(button, action: action)
+                    .buttonStyle(PixelButtonStyle(fill: Self.pink, hPad: 12))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(12)
+        .pixelBox(Theme.card)
+    }
+
+    /// Rosie's menu, ordered the way you order at Bea's: pick, then confirm.
+    private var menuCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                SpriteView(sprite: Sprites.rosie, pixel: 2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("WHAT CAN I GET YOU?").font(.pixel(11, .heavy)).foregroundStyle(Theme.ink)
+                    Text("Everything's on the house ♡").font(.pixel(9, .bold)).foregroundStyle(Self.rose)
+                }
+                Spacer()
+                Button("Not now", action: close)
+                    .font(.pixel(11, .heavy))
+                    .foregroundStyle(Theme.muted)
+                    .frame(minHeight: 32)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                ForEach(TogetherFood.menu.indices, id: \.self) { i in
+                    let item = TogetherFood.menu[i]
+                    let on = picking == i
+                    Button { picking = i } label: {
+                        VStack(spacing: 3) {
+                            SpriteView(sprite: item.sprite, pixel: 3)
+                                .frame(height: 30)
+                            Text(item.name).font(.pixel(10, .heavy)).foregroundStyle(Theme.ink)
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .pixelBox(on ? Color(hex: 0xFFE1EC) : Theme.card, shadow: on ? 2 : 1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(item.name)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            Button {
+                close()
+                orderFood(picking)
+            } label: {
+                Text("Order \(TogetherFood.item(picking).name.lowercased()) · \(TogetherFood.item(picking).blurb.lowercased())")
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PixelButtonStyle(fill: Self.pink))
+        }
+        .padding(12)
+        .pixelBox(Theme.card)
+    }
+
+    /// Emotes and one-tap lines in one place.
+    private var reactCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 6), spacing: 5) {
+                ForEach(TogetherEmote.all.indices, id: \.self) { i in
+                    Button { send(emote: i) } label: {
+                        SpriteView(sprite: TogetherEmote.all[i], pixel: 3)
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .pixelBox(Theme.card, shadow: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(TogetherEmote.names[i])
+                }
+            }
+            FlowRow(spacing: 5) {
+                ForEach(TogetherEmote.phrases.indices, id: \.self) { i in
+                    Button { send(say: i) } label: {
+                        Text(TogetherEmote.phrases[i])
+                            .font(.pixel(11, .bold)).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .pixelBox(Color(hex: 0xFFF6EA), shadow: 1)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(10)
+        .pixelBox(Theme.card)
+    }
+
+    /// Your run of back-to-back sessions, and what it takes to wear the crown.
+    @ViewBuilder private var streakLine: some View {
+        let row = store.togetherRow + 1
+        let holder = crownHolder
+        HStack(spacing: 5) {
+            if holder?.id == hall.me?.id && holder != nil {
+                SpriteView(sprite: Self.crown, pixel: 1.5)
+                Text("You wear the crown · \(row) in a row").font(.pixel(10, .heavy)).foregroundStyle(Self.rose)
+            } else if let holder, holder.row + 1 > row {
+                SpriteView(sprite: Self.crown, pixel: 1.5)
+                Text("\(holder.row + 1 - row) more in a row to take the crown from \(holder.name)")
+                    .font(.pixel(10, .heavy)).foregroundStyle(Self.rose).lineLimit(2)
+            } else {
+                Text("🔥 Session \(row) in a row · stay for the next to keep it going")
+                    .font(.pixel(10, .heavy)).foregroundStyle(Self.rose).lineLimit(2)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The next few session start times, tap one to get a reminder.
+    private func bookingChips(from slot: TogetherSchedule.Slot) -> some View {
+        let starts = (0..<4).map { slot.start.addingTimeInterval(Double($0) * TogetherSchedule.length) }
+        return HStack(spacing: 5) {
+            Image(systemName: "bell.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.muted)
+            ForEach(starts, id: \.self) { start in
+                let on = reminders.isBooked(start)
+                Button {
+                    reminders.toggle(start)
+                    SoundFX.shared.play(on ? .close : .open, volume: 0.6)
+                } label: {
+                    Text(TogetherSchedule.label(start))
+                        .font(.pixel(10, .heavy))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        .pixelBox(on ? Self.pink : Theme.cream, shadow: on ? 2 : 1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(on ? "Reminder on for \(TogetherSchedule.label(start))" : "Remind me at \(TogetherSchedule.label(start))")
+            }
+        }
+    }
+
+    /// The hook of the house: a shared session at every :00 and :30.
+    private var sessionCard: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { tl in
+            let slot = TogetherSchedule.upcoming(after: tl.date, includeRunning: true)
+            let running = slot.focusing(at: tl.date)
+            let n = sessionCount(slot)
+            HStack(spacing: 12) {
+                SessionClock(running: running, progress: running ? 1 - slot.focusEnd.timeIntervalSince(tl.date) / TimeInterval(TogetherSchedule.focusMinutes * 60) : 0)
+                    .frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(running ? "Focus session · \(FocusFormat.clock(slot.focusEnd.timeIntervalSince(tl.date))) left"
+                                 : "Next session at \(TogetherSchedule.label(slot.start))")
+                        .font(.pixel(14, .heavy)).foregroundStyle(Theme.ink).monospacedDigit()
+                    Text(running ? (n > 0 ? "\(count(n, "person", plural: "people")) focusing right now. Hop in." : "Be the first at the desks.")
+                                 : "Starts in \(FocusFormat.clock(slot.start.timeIntervalSince(tl.date))). 25 min together, then a break.")
+                        .font(.pixel(11, .medium)).foregroundStyle(Theme.muted)
+                        .monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button(running ? "Join" : "Save a seat", action: joinSession)
+                    .buttonStyle(PixelButtonStyle(fill: Self.pink, hPad: 12))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(12)
+            .overlay(alignment: .bottom) { EmptyView() }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let holder = crownHolder {
+                        HStack(spacing: 4) {
+                            SpriteView(sprite: Self.crown, pixel: 1.5)
+                            Text("\(holder.name) has the crown · \(holder.row) in a row")
+                                .font(.pixel(9, .heavy)).foregroundStyle(Self.rose)
+                        }
+                    }
+                    bookingChips(from: running ? slot.next : slot)
+                }
+                .padding(.horizontal, 12).padding(.bottom, 10)
+            }
+            .pixelBox(Theme.card)
+        }
+    }
+
+    /// Your desk: in a shared session, waiting for one, or free.
+    @ViewBuilder private var deskCard: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { tl in
+            let slot = TogetherSchedule.upcoming(after: tl.date, includeRunning: true)
+            if let f = store.activeFocus {
+                let left = f.end.timeIntervalSince(tl.date)
+                let together = abs(f.end.timeIntervalSince(slot.focusEnd)) < 120
+                // Together, the bar tracks the shared 25 minutes, so everyone's bar matches.
+                let total = together ? slot.focusEnd.timeIntervalSince(slot.start) : f.duration
+                let fill = max(0, min(1, left / total))
+                let others = max(0, sessionCount(slot) - 1)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(f.onBreak ? "On a break" : (together ? "Focusing together" : "Focusing"))
+                            .font(.pixel(14, .heavy)).foregroundStyle(Theme.ink)
+                        Spacer()
+                        Text(FocusFormat.clock(left)).font(.pixel(16, .heavy)).foregroundStyle(Theme.ink).monospacedDigit()
+                    }
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(Theme.cream)
+                            Rectangle().fill(Color(hex: 0xA9C8F5)).frame(width: g.size.width * (1 - fill))
+                        }
+                        .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
+                    }
+                    .frame(height: 10)
+                    Text(together ? (others > 0 ? "\(count(others, "person", plural: "people")) working with you. Rosie's baking for the break." : "You're holding the room. Others can join any time.")
+                                  : "Everyone here can see you working.")
+                        .font(.pixel(10, .medium)).foregroundStyle(Theme.muted)
+                    if together { streakLine }
+                }
+                .padding(12)
+                .pixelBox(Theme.card)
+            } else if let waiting = joinedSlot, tl.date < waiting.start {
+                hint(HallLooks.sprite(look), "Your seat is saved", "The session starts at \(TogetherSchedule.label(waiting.start)). That's in \(FocusFormat.clock(waiting.start.timeIntervalSince(tl.date))).") {
+                    BakingDots().frame(width: 34)
+                }
+            } else {
+                hint(HallLooks.sprite(look), "Your desk",
+                     slot.focusing(at: tl.date) ? "A session is on. Join and finish with everyone." : "The next session starts at \(TogetherSchedule.label(slot.start)).",
+                     button: slot.focusing(at: tl.date) ? "Join" : "Save a seat", action: joinSession)
+            }
+        }
+    }
+
+    private func barButton(_ symbol: String, _ label: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.system(size: 17, weight: .bold))
-                Text(label).font(.pixel(9, .heavy))
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 13, weight: .bold))
+                Text(label).font(.pixel(10, .heavy))
             }
             .foregroundStyle(Theme.ink)
-            .frame(maxWidth: .infinity, minHeight: 54)
-            .background(on ? color.opacity(0.6) : color)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(on ? Self.pink : Theme.cream)
             .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
-            .background(Rectangle().fill(Theme.ink).offset(x: on ? 1 : 3, y: on ? 1 : 3))
-            .offset(x: on ? 2 : 0, y: on ? 2 : 0)
+            .background(Rectangle().fill(Theme.ink).offset(x: on ? 1 : 2, y: on ? 1 : 2))
+            .offset(x: on ? 1 : 0, y: on ? 1 : 0)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-    }
-
-    @ViewBuilder private func trayView(_ tray: Tray) -> some View {
-        Group {
-            switch tray {
-            case .emote:
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 6) {
-                    ForEach(TogetherEmote.all.indices, id: \.self) { i in
-                        Button { send(emote: i) } label: {
-                            VStack(spacing: 2) {
-                                SpriteView(sprite: TogetherEmote.all[i], pixel: 3)
-                                    .frame(height: 27)
-                                Text(TogetherEmote.names[i]).font(.pixel(7, .heavy)).foregroundStyle(Theme.muted)
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 46)
-                            .background(Theme.card)
-                            .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(TogetherEmote.names[i])
-                    }
-                }
-            case .say:
-                FlowRow(spacing: 6) {
-                    ForEach(TogetherEmote.phrases.indices, id: \.self) { i in
-                        Button { send(say: i) } label: {
-                            Text(TogetherEmote.phrases[i])
-                                .font(.pixel(11, .bold)).foregroundStyle(Theme.ink)
-                                .padding(.horizontal, 8).padding(.vertical, 6)
-                                .background(Theme.card)
-                                .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            case .eat:
-                VStack(spacing: 6) {
-                    HStack {
-                        Text("ROSIE'S MENU").font(.pixel(12, .heavy)).foregroundStyle(Theme.ink)
-                        Spacer()
-                        Text("on the house ♡").font(.pixel(9, .bold)).foregroundStyle(Color(hex: 0xC2577A))
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color(hex: 0xF7B7CF))
-                    .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                        ForEach(TogetherFood.menu.indices, id: \.self) { i in
-                            let item = TogetherFood.menu[i]
-                            Button { orderFood(i) } label: {
-                                HStack(spacing: 6) {
-                                    SpriteView(sprite: item.sprite, pixel: 3)
-                                        .frame(width: 28, height: 28)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(item.name).font(.pixel(10, .heavy)).foregroundStyle(Theme.ink)
-                                        Text(item.blurb).font(.pixel(7, .semibold)).foregroundStyle(Theme.muted)
-                                    }
-                                    .lineLimit(1).minimumScaleFactor(0.7)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 6)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .background(Theme.card)
-                                .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Order \(item.name)")
-                        }
-                    }
-                }
-            }
-        }
-        .padding(8)
-        .pixelBox(Theme.cream, shadow: 2)
-    }
-
-    @ViewBuilder private var focusStrip: some View {
-        HStack(spacing: 8) {
-            if let f = store.activeFocus {
-                TimelineView(.periodic(from: .now, by: 1)) { tl in
-                    Text(f.onBreak ? "Break · \(FocusFormat.clock(f.end.timeIntervalSince(tl.date)))" : "Focusing · \(FocusFormat.clock(f.end.timeIntervalSince(tl.date)))")
-                        .font(.pixel(13, .heavy)).foregroundStyle(Theme.ink).monospacedDigit()
-                }
-                Spacer()
-            } else {
-                Text("Focus:").font(.pixel(12, .heavy)).foregroundStyle(Theme.ink)
-                Button("25 min") { store.startFocus(title: "Together House", drink: .espresso, letterID: nil) }
-                    .buttonStyle(PixelButtonStyle(hPad: 10))
-                Button("50 min") { store.startFocus(title: "Together House", drink: .latte, letterID: nil) }
-                    .buttonStyle(PixelButtonStyle(fill: Theme.card, hPad: 10))
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(8)
-        .pixelBox(Theme.cream, shadow: 2)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     // MARK: Joining
 
+    /// One tap to come in. You're a cozy anonymous name; no typing, no account.
     private var joinCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if case .offline(let why) = hall.phase {
-                HStack {
-                    Text(why).font(.pixel(11, .semibold)).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Button("Try again") { hall.retry() }.font(.pixel(11, .heavy)).foregroundStyle(Theme.ink).underline()
+        TimelineView(.periodic(from: .now, by: 1)) { tl in
+            let slot = TogetherSchedule.upcoming(after: tl.date, includeRunning: true)
+            let running = slot.focusing(at: tl.date)
+            VStack(alignment: .leading, spacing: 12) {
+                if case .offline(let why) = hall.phase {
+                    HStack {
+                        Text(why).font(.pixel(11, .semibold)).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("Try again") { hall.retry() }.font(.pixel(11, .heavy)).foregroundStyle(Theme.ink).underline()
+                    }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(running ? "A session is on · \(FocusFormat.clock(slot.focusEnd.timeIntervalSince(tl.date))) left"
+                                 : "Next session at \(TogetherSchedule.label(slot.start))")
+                        .font(.pixel(15, .heavy)).foregroundStyle(Theme.ink).monospacedDigit()
+                    Text("Focus alongside real people, anywhere in the world. Everyone's anonymous. Finish together and Rosie bakes you double treats.")
+                        .font(.pixel(11, .medium)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 10) {
+                    SpriteView(sprite: HallLooks.sprite(look), pixel: 2.5)
+                        .frame(width: 42)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("YOU'LL BE").font(.pixel(8, .heavy)).foregroundStyle(Theme.muted)
+                        Text(savedName).font(.pixel(14, .heavy)).foregroundStyle(Theme.ink).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        savedName = CozyNames.random()
+                        look = Int.random(in: 0..<HallLooks.all.count)
+                        SoundFX.shared.play(.pop, volume: 0.6)
+                    } label: {
+                        Image(systemName: "dice.fill").font(.system(size: 16, weight: .heavy))
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: 44, height: 40)
+                            .pixelBox(Theme.cream, shadow: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New name and look")
+                }
+                Button(running ? "Come in and join" : "Come in", action: comeIn)
+                    .buttonStyle(PixelButtonStyle(fill: Self.pink))
+                    .frame(maxWidth: .infinity)
+                if !hall.canJoin {
+                    Text("You're not signed in to iCloud, so others won't see you. You can still focus with everyone.")
+                        .font(.pixel(9, .semibold)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Text("Come in, grab a snack, find a seat. Real people from around the world hang out and work here.")
-                .font(.pixel(11, .semibold)).foregroundStyle(Theme.ink)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button { look -= 1 } label: { Image(systemName: "chevron.left").font(.system(size: 13, weight: .heavy)) }
-                    .accessibilityLabel("Previous look")
-                SpriteView(sprite: HallLooks.sprite(look), pixel: 2.5)
-                Button { look += 1 } label: { Image(systemName: "chevron.right").font(.system(size: 13, weight: .heavy)) }
-                    .accessibilityLabel("Next look")
-                TextField("Your name", text: $draft)
-                    .font(.pixel(14, .bold))
-                    .textInputAutocapitalization(.words)
-                    .autocorrectionDisabled()
-                    .submitLabel(.join)
-                    .focused($typing)
-                    .onSubmit(comeIn)
-                    .onChange(of: draft) { if draft.count > NameRules.maxLength { draft = String(draft.prefix(NameRules.maxLength)) } }
-                    .padding(.horizontal, 8)
-                    .frame(height: 40)
-                    .background(Theme.card)
-                    .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
-            }
-            .foregroundStyle(Theme.ink)
-            if !hall.canJoin {
-                Text("Sign in to iCloud in Settings to come in. You can still peek inside.")
-                    .font(.pixel(10, .semibold)).foregroundStyle(Theme.red)
-            } else if !draft.isEmpty, let problem = NameRules.problem(draft) {
-                Text(problem).font(.pixel(10, .semibold)).foregroundStyle(Theme.red)
-            }
-            Button("Come in", action: comeIn)
-                .buttonStyle(PixelButtonStyle(fill: Color(hex: 0xF7B7CF)))
-                .disabled(!hall.canJoin || NameRules.problem(draft) != nil)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .pixelBox(Theme.cream)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .pixelBox(Theme.cream)
+    }
+
+    /// After a shared session: what you did, the bonus, and a card to share.
+    private func resultCard(_ r: SessionResult) -> some View {
+        let image = SessionShareCard(people: r.people, minutes: r.minutes, total: r.total, look: look, name: savedName).snapshot()
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("You did it! 🍪🍪").font(.pixel(15, .heavy)).foregroundStyle(Theme.ink)
+                Text(r.people > 1 ? "\(r.minutes) min with \(r.people - 1) \(r.people == 2 ? "other" : "others"). Rosie baked you a bonus treat."
+                                  : "\(r.minutes) min of focus. Rosie baked you a bonus treat.")
+                    .font(.pixel(11, .medium)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Session #\(r.total) together").font(.pixel(9, .heavy)).foregroundStyle(Self.rose)
+            }
+            Spacer(minLength: 4)
+            VStack(spacing: 6) {
+                if let image {
+                    ShareLink(item: Image(uiImage: image), preview: SharePreview("Focused together", image: Image(uiImage: image))) {
+                        Label("Share", systemImage: "square.and.arrow.up").font(.pixel(11, .heavy))
+                    }
+                    .buttonStyle(PixelButtonStyle(fill: Self.pink, hPad: 10))
+                }
+                Button("Done") { withAnimation(.snappy) { result = nil } }
+                    .font(.pixel(11, .heavy)).foregroundStyle(Theme.muted)
+            }
+            .fixedSize()
+        }
+        .padding(12)
+        .pixelBox(Theme.card)
     }
 
     private func comeIn() {
-        guard hall.canJoin, NameRules.problem(draft) == nil else { return }
-        savedName = NameRules.clean(draft)
+        if NameRules.problem(savedName) != nil { savedName = CozyNames.random() }
         typing = false
         hall.join(name: savedName, look: look)
         syncStatus()
@@ -675,5 +1130,99 @@ struct FlowRow: Layout {
             x += size.width + spacing
             rowH = max(rowH, size.height)
         }
+    }
+}
+
+/// Three little pixel dots that hop while Rosie bakes.
+struct BakingDots: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 12)) { tl in
+            let t = tl.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { i in
+                    Rectangle()
+                        .fill(Color(hex: 0xC2577A))
+                        .frame(width: 6, height: 6)
+                        .offset(y: -abs(sin(t * 6 - Double(i) * 0.7)) * 5)
+                }
+            }
+            .frame(height: 16)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// A tiny pixel wall clock: a pie that fills up while a session runs, or two hands while you wait.
+struct SessionClock: View {
+    let running: Bool
+    let progress: Double
+
+    var body: some View {
+        Canvas { ctx, size in
+            let n = 16
+            let s = min(size.width, size.height) / CGFloat(n)
+            let p = Painter(ctx: ctx, s: s)
+            let ink = Theme.ink
+            let c = 7.5
+            for y in 0..<n {
+                for x in 0..<n {
+                    let dx = Double(x) - c, dy = Double(y) - c
+                    let d = (dx * dx + dy * dy).squareRoot()
+                    if d > 7.6 { continue }
+                    if d > 6.4 { p.dot(x, y, ink); continue }
+                    var a = atan2(dx, -dy) / (2 * .pi)
+                    if a < 0 { a += 1 }
+                    let filled = running && a <= progress
+                    p.dot(x, y, filled ? Color(hex: 0xF7B7CF) : Theme.cream)
+                }
+            }
+            if !running {
+                p.rect(7, 3, 2, 5, ink)
+                p.rect(8, 7, 4, 2, ink)
+            } else {
+                p.rect(7, 7, 2, 2, ink)
+            }
+            for (x, y) in [(7, 1), (7, 13), (1, 7), (13, 7)] { p.rect(x, y, 2, 2, Color(hex: 0xC2577A)) }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The square card people share after a Together House session.
+struct SessionShareCard: View {
+    let people: Int
+    let minutes: Int
+    let total: Int
+    let look: Int
+    let name: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            TogetherScene(running: true, progress: 1, grid: 64)
+                .frame(width: 300, height: 190)
+                .framed()
+            VStack(spacing: 4) {
+                Text(people > 1 ? "I focused \(minutes) min with \(people - 1) strangers" : "I focused \(minutes) min in the Together House")
+                    .font(.pixel(17, .heavy)).foregroundStyle(Theme.ink)
+                    .multilineTextAlignment(.center)
+                Text("as \(name) · session #\(total)").font(.pixel(11, .bold)).foregroundStyle(Color(hex: 0xC2577A))
+            }
+            HStack(spacing: 6) {
+                SpriteView(sprite: Sprites.rosie, pixel: 2)
+                Text("Workdoro · free on the App Store").font(.pixel(11, .heavy)).foregroundStyle(Theme.ink)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .pixelBox(Color(hex: 0xFFE38A), shadow: 2)
+        }
+        .padding(20)
+        .frame(width: 360, height: 360)
+        .background(Color(hex: 0xFFE1EC))
+        .environment(\.colorScheme, .light)
+    }
+
+    @MainActor func snapshot() -> UIImage? {
+        let r = ImageRenderer(content: self)
+        r.scale = 3
+        return r.uiImage
     }
 }

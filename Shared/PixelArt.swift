@@ -14,11 +14,15 @@ extension Color {
 
 struct Sprite {
     let rows: [[Character]]
-    var palette: [Character: Color]
+    var palette: [Character: Color] { didSet { key = Self.makeKey(rows, palette) } }
+    /// Identifies this drawing (shape and colours), so its picture can be made once and reused.
+    private(set) var key: Int
 
     init(_ rows: [String], _ palette: [Character: Color]) {
-        self.rows = rows.map { Array($0) }
+        let r = rows.map { Array($0) }
+        self.rows = r
         self.palette = palette
+        self.key = Self.makeKey(r, palette)
     }
 
     /// The same drawing with some colors swapped, for extra villagers.
@@ -30,21 +34,221 @@ struct Sprite {
 
     var width: Int { rows.map(\.count).max() ?? 0 }
     var height: Int { rows.count }
+
+    private static func makeKey(_ rows: [[Character]], _ palette: [Character: Color]) -> Int {
+        var h = Hasher()
+        for row in rows { h.combine(String(row)) }
+        for (k, v) in palette.sorted(by: { $0.key < $1.key }) { h.combine(k); h.combine(v) }
+        return h.finalize()
+    }
 }
 
-/// Draws on a low-resolution pixel grid, scaled up.
-struct Painter {
+/// Sprites turned into tiny bitmaps (one pixel per art pixel), made once and then drawn as a single
+/// picture instead of hundreds of separate squares every frame.
+enum SpriteImages {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [Int: CGImage] = [:]
+
+    static func image(_ sprite: Sprite, flip: Bool, walkFrame: Int? = nil) -> CGImage? {
+        var h = Hasher()
+        h.combine(sprite.key); h.combine(flip); h.combine(walkFrame)
+        let k = h.finalize()
+        lock.lock(); defer { lock.unlock() }
+        if let hit = cache[k] { return hit }
+        let made = render(sprite, flip: flip, walkFrame: walkFrame)
+        if cache.count > 600 { cache.removeAll() }
+        cache[k] = made
+        return made
+    }
+
+    private static func render(_ sprite: Sprite, flip: Bool, walkFrame: Int?) -> CGImage? {
+        let w = sprite.width, h = sprite.height
+        guard w > 0, h > 0,
+              let cg = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                 space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let env = EnvironmentValues()
+        var colors: [Character: CGColor] = [:]
+        func color(_ ch: Character) -> CGColor? {
+            if let c = colors[ch] { return c }
+            guard let c = sprite.palette[ch]?.resolve(in: env).cgColor else { return nil }
+            colors[ch] = c
+            return c
+        }
+        func put(_ x: Int, _ y: Int, _ c: CGColor) {
+            let px = flip ? w - 1 - x : x
+            cg.setFillColor(c)
+            cg.fill(CGRect(x: px, y: h - 1 - y, width: 1, height: 1))
+        }
+        let odd = (walkFrame ?? 0) % 2 == 1
+        for (r, row) in sprite.rows.enumerated() where !odd || r < 14 {
+            for (c, ch) in row.enumerated() where ch != "." {
+                if let col = color(ch) { put(c, r, col) }
+            }
+        }
+        if odd, sprite.rows.count > 14 {
+            // Legs apart, mid-step (matches the old per-pixel walking drawing).
+            let pantsKey = sprite.rows[14].count > 4 ? sprite.rows[14][4] : "p"
+            let pants = color(pantsKey) ?? CGColor(gray: 0.5, alpha: 1)
+            let ink = color("k") ?? CGColor(gray: 0, alpha: 1)
+            for (r, row) in ["..kppk....kppk..", "..kkk......kkk.."].enumerated() {
+                for (c, ch) in row.enumerated() where ch != "." { put(c, 14 + r, ch == "k" ? ink : pants) }
+            }
+        }
+        return cg.makeImage()
+    }
+}
+
+/// Collects squares of one colour drawn back to back and fills them as one shape.
+/// The town draws thousands of art pixels a frame; one fill call each was the main cost.
+final class PixelBatch {
     let ctx: GraphicsContext
+    private var path = Path()
+    private var color: Color?
+    private var count = 0
+
+    init(_ ctx: GraphicsContext) { self.ctx = ctx }
+
+    func add(_ r: CGRect, _ c: Color) {
+        if c != color { flush(); color = c }
+        path.addRect(r)
+        count += 1
+    }
+
+    func flush() {
+        if count > 0, let color { ctx.fill(path, with: .color(color)) }
+        path = Path(); count = 0; color = nil
+    }
+}
+
+/// A small bitmap the art is drawn into, one frame at a time, at `k` image pixels per art pixel.
+/// Filling a few thousand tiny squares in a bitmap is far cheaper than handing each one to SwiftUI.
+final class PixelBitmap {
+    let cg: CGContext
+    let k: CGFloat
+    let width: Int, height: Int
+
+    init?(cols: Int, rows: Int, k: Int) {
+        let w = max(1, cols * k), h = max(1, rows * k)
+        guard let cg = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                 space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        // Top-left origin, like SwiftUI.
+        cg.translateBy(x: 0, y: CGFloat(h))
+        cg.scaleBy(x: 1, y: -1)
+        cg.interpolationQuality = .none
+        cg.setShouldAntialias(false)
+        self.cg = cg; self.k = CGFloat(k); width = w; height = h
+    }
+
+    // Colours and glows are worked out once and reused.
+    nonisolated(unsafe) private static var colors: [Color: CGColor] = [:]
+    nonisolated(unsafe) private static var gradients: [Color: CGGradient] = [:]
+    private static let env = EnvironmentValues()
+    private var lastFill: Color?
+
+    static func cgColor(_ c: Color) -> CGColor {
+        if let hit = colors[c] { return hit }
+        let made = c.resolve(in: env).cgColor
+        if colors.count > 4000 { colors.removeAll() }
+        colors[c] = made
+        return made
+    }
+
+    func fill(_ r: CGRect, _ c: Color) {
+        if c != lastFill { cg.setFillColor(Self.cgColor(c)); lastFill = c }
+        cg.fill(r)
+    }
+
+    func fillUnion(_ rects: [CGRect], _ c: Color) {
+        cg.setFillColor(Self.cgColor(c)); lastFill = c
+        cg.addRects(rects)
+        cg.fillPath(using: .winding)
+    }
+
+    /// Draws a picture right way up into a top-left-origin rect.
+    func draw(_ img: CGImage, in r: CGRect) {
+        cg.saveGState()
+        cg.translateBy(x: r.minX, y: r.maxY)
+        cg.scaleBy(x: 1, y: -1)
+        cg.draw(img, in: CGRect(origin: .zero, size: r.size))
+        cg.restoreGState()
+    }
+
+    func glow(center: CGPoint, radius: CGFloat, color: Color, alpha: Double) {
+        let key = color.opacity(alpha)
+        let g: CGGradient
+        if let hit = Self.gradients[key] { g = hit } else {
+            let c = Self.cgColor(key)
+            let clear = c.copy(alpha: 0) ?? c
+            g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [c, clear] as CFArray, locations: [0, 1])!
+            if Self.gradients.count > 1000 { Self.gradients.removeAll() }
+            Self.gradients[key] = g
+        }
+        cg.drawRadialGradient(g, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: [])
+    }
+
+    func image() -> CGImage? { cg.makeImage() }
+
+    func clear() {
+        cg.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        lastFill = nil
+    }
+}
+
+/// Draws on a low-resolution pixel grid, scaled up: either onto a SwiftUI canvas or into a `PixelBitmap`.
+struct Painter {
+    private let gc: GraphicsContext?
+    private let bitmap: PixelBitmap?
     let s: CGFloat
+    /// When set, fills are gathered and drawn in runs (see `PixelBatch`); `ox`/`oy` is how far this
+    /// painter is shifted from the canvas origin.
+    var batch: PixelBatch? = nil
+    var ox: CGFloat = 0
+    var oy: CGFloat = 0
+
+    init(ctx: GraphicsContext, s: CGFloat, batch: PixelBatch? = nil, ox: CGFloat = 0, oy: CGFloat = 0) {
+        gc = ctx; bitmap = nil; self.s = s; self.batch = batch; self.ox = ox; self.oy = oy
+    }
+
+    init(bitmap: PixelBitmap, ox: CGFloat = 0, oy: CGFloat = 0) {
+        gc = nil; self.bitmap = bitmap; s = bitmap.k; self.ox = ox; self.oy = oy
+    }
+
+    /// The SwiftUI canvas, for the few drawings that need it directly (only when drawing onto one).
+    var ctx: GraphicsContext { gc! }
+    var isBitmap: Bool { bitmap != nil }
+
+    /// Draws with batching on, then makes sure everything gathered reaches the canvas.
+    static func batched(_ ctx: GraphicsContext, s: CGFloat, _ draw: (Painter) -> Void) {
+        let b = PixelBatch(ctx)
+        draw(Painter(ctx: ctx, s: s, batch: b))
+        b.flush()
+    }
 
     func rect(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ color: Color) {
         guard w > 0, h > 0 else { return }
+        if let bitmap {
+            bitmap.fill(CGRect(x: CGFloat(x) * s + ox, y: CGFloat(y) * s + oy, width: CGFloat(w) * s, height: CGFloat(h) * s), color)
+            return
+        }
         let r = CGRect(x: CGFloat(x) * s, y: CGFloat(y) * s, width: CGFloat(w) * s + 0.5, height: CGFloat(h) * s + 0.5)
-        ctx.fill(Path(r), with: .color(color))
+        if let batch {
+            batch.add(r.offsetBy(dx: ox, dy: oy), color)
+        } else {
+            ctx.fill(Path(r), with: .color(color))
+        }
     }
 
     /// Many rects filled as one shape, so a see-through colour never doubles up where they overlap.
     func rects(_ list: [(Int, Int, Int, Int)], _ color: Color) {
+        if let bitmap {
+            bitmap.fillUnion(list.filter { $0.2 > 0 && $0.3 > 0 }.map {
+                CGRect(x: CGFloat($0.0) * s + ox, y: CGFloat($0.1) * s + oy, width: CGFloat($0.2) * s, height: CGFloat($0.3) * s)
+            }, color)
+            return
+        }
+        flush()
         var path = Path()
         for (x, y, w, h) in list where w > 0 && h > 0 {
             path.addRect(CGRect(x: CGFloat(x) * s, y: CGFloat(y) * s, width: CGFloat(w) * s + 0.5, height: CGFloat(h) * s + 0.5))
@@ -52,13 +256,19 @@ struct Painter {
         ctx.fill(path, with: .color(color))
     }
 
+    /// Sends any gathered squares to the canvas, before drawing something straight onto it.
+    func flush() { batch?.flush() }
+
     /// The same painter, nudged up or down by some rows.
     func shifted(dy: Int) -> Painter { shifted(dx: 0, dy: dy) }
 
     func shifted(dx: Int, dy: Int) -> Painter {
+        if let bitmap {
+            return Painter(bitmap: bitmap, ox: ox + CGFloat(dx) * s, oy: oy + CGFloat(dy) * s)
+        }
         var moved = ctx
         moved.translateBy(x: CGFloat(dx) * s, y: CGFloat(dy) * s)
-        return Painter(ctx: moved, s: s)
+        return Painter(ctx: moved, s: s, batch: batch, ox: ox + CGFloat(dx) * s, oy: oy + CGFloat(dy) * s)
     }
 
     func dot(_ x: Int, _ y: Int, _ color: Color) {
@@ -66,38 +276,37 @@ struct Painter {
     }
 
     func sprite(_ sprite: Sprite, x: Int, y: Int, flip: Bool = false) {
-        let width = sprite.width
-        for (r, row) in sprite.rows.enumerated() {
-            for (c, ch) in row.enumerated() {
-                guard ch != ".", let color = sprite.palette[ch] else { continue }
-                let px = flip ? x + width - 1 - c : x + c
-                dot(px, y + r, color)
-            }
-        }
+        guard let img = SpriteImages.image(sprite, flip: flip) else { return }
+        place(img, x: x, y: y)
     }
 
     /// Draws a sprite mid-step: same body, legs apart on odd frames.
     func walking(_ sprite: Sprite, x: Int, y: Int, flip: Bool, frame: Int) {
-        let width = sprite.width
-        for (r, row) in sprite.rows.enumerated() where r < 14 || frame % 2 == 0 {
-            for (c, ch) in row.enumerated() {
-                guard ch != ".", let color = sprite.palette[ch] else { continue }
-                dot(flip ? x + width - 1 - c : x + c, y + r, color)
-            }
+        guard let img = SpriteImages.image(sprite, flip: flip, walkFrame: frame % 2) else { return }
+        place(img, x: x, y: y)
+    }
+
+    private func place(_ img: CGImage, x: Int, y: Int) {
+        picture(img, x: x, y: y, w: img.width, h: img.height)
+    }
+
+    /// A finished picture stretched over an area of art pixels (nearest-neighbour, so it stays crisp).
+    func picture(_ img: CGImage, x: Int, y: Int, w: Int, h: Int) {
+        if let bitmap {
+            bitmap.draw(img, in: CGRect(x: CGFloat(x) * s + ox, y: CGFloat(y) * s + oy, width: CGFloat(w) * s, height: CGFloat(h) * s))
+            return
         }
-        if frame % 2 == 1, sprite.rows.count > 14 {
-            let pantsKey = sprite.rows[14].count > 4 ? sprite.rows[14][4] : "p"
-            let pants = sprite.palette[pantsKey] ?? .gray
-            let ink = sprite.palette["k"] ?? .black
-            for (r, row) in ["..kppk....kppk..", "..kkk......kkk.."].enumerated() {
-                for (c, ch) in row.enumerated() where ch != "." {
-                    dot(flip ? x + width - 1 - c : x + c, y + 14 + r, ch == "k" ? ink : pants)
-                }
-            }
-        }
+        flush()
+        ctx.draw(Image(decorative: img, scale: 1).interpolation(.none),
+                 in: CGRect(x: CGFloat(x) * s, y: CGFloat(y) * s, width: CGFloat(w) * s, height: CGFloat(h) * s))
     }
 
     func glow(_ x: Double, _ y: Double, radius: Double, _ color: Color, _ alpha: Double) {
+        if let bitmap {
+            bitmap.glow(center: CGPoint(x: x * s + ox, y: y * s + oy), radius: radius * s, color: color, alpha: alpha)
+            return
+        }
+        flush()
         let center = CGPoint(x: x * s, y: y * s)
         let r = radius * s
         let gradient = Gradient(colors: [color.opacity(alpha), color.opacity(0)])
@@ -105,6 +314,164 @@ struct Painter {
             Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)),
             with: .radialGradient(gradient, center: center, startRadius: 0, endRadius: r)
         )
+    }
+
+    /// Draws `body` as its own layer, then washes `tints` over only what it drew
+    /// (so a figure can be shaded to match the evening without tinting the background twice).
+    func tintedLayer(width: Int, height: Int, tints: [Color], _ body: (Painter) -> Void) {
+        if let bitmap {
+            let cg = bitmap.cg
+            cg.saveGState()
+            cg.beginTransparencyLayer(auxiliaryInfo: nil)
+            body(self)
+            cg.setBlendMode(.sourceAtop)
+            let r = CGRect(x: ox, y: oy, width: CGFloat(width) * s, height: CGFloat(height) * s)
+            for t in tints { cg.setFillColor(PixelBitmap.cgColor(t)); cg.fill(r) }
+            cg.endTransparencyLayer()
+            cg.restoreGState()
+            return
+        }
+        flush()
+        ctx.drawLayer { layer in
+            let q = Painter(ctx: layer, s: s)
+            body(q)
+            layer.blendMode = .sourceAtop
+            for t in tints {
+                layer.fill(Path(CGRect(x: 0, y: 0, width: CGFloat(width) * s, height: CGFloat(height) * s)), with: .color(t))
+            }
+        }
+    }
+
+    /// Only lets drawing inside the given art area through.
+    func clipped(x: Int, y: Int, w: Int, h: Int, _ body: (Painter) -> Void) {
+        if let bitmap {
+            bitmap.cg.saveGState()
+            bitmap.cg.clip(to: CGRect(x: CGFloat(x) * s + ox, y: CGFloat(y) * s + oy, width: CGFloat(w) * s, height: CGFloat(h) * s))
+            body(self)
+            bitmap.cg.restoreGState()
+            return
+        }
+        flush()
+        var c = ctx
+        c.clip(to: Path(CGRect(x: CGFloat(x) * s, y: CGFloat(y) * s, width: CGFloat(w) * s, height: CGFloat(h) * s)))
+        body(Painter(ctx: c, s: s))
+    }
+}
+
+/// Pixel art drawn a frame at a time into one small bitmap, then shown as a single crisp picture.
+/// The drawing happens on a background thread, so the main thread stays free for touches and
+/// scrolling; the newest finished frame is shown as soon as it's ready.
+/// `cols`×`rows` art pixels, each `s` points on screen; `k` image pixels per art pixel (2 keeps glows soft).
+/// `frame` should change whenever there's something new to draw (usually the timeline's time).
+/// The draw closure runs off the main thread: it must only use values, never the store or other live objects.
+struct PixelCanvas: View {
+    let cols: Int
+    let rows: Int
+    let s: CGFloat
+    var k: Int = 2
+    var frame: Double = 0
+    let draw: (Painter) -> Void
+
+    @State private var job = PixelRenderJob()
+
+    var body: some View {
+        let _ = job.submit(frame: frame, cols: cols, rows: rows, k: k, draw: draw)
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                if let img = job.image {
+                    Image(decorative: img, scale: 1)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: CGFloat(cols) * s, height: CGFloat(rows) * s)
+                }
+            }
+            .clipped()
+    }
+}
+
+/// Renders one `PixelCanvas`'s frames in the background, never more than one at a time,
+/// always skipping ahead to the newest frame asked for.
+@Observable
+final class PixelRenderJob {
+    private(set) var image: CGImage?
+
+    /// Every pixel canvas shares this one queue, so the drawing code never runs twice at once.
+    static let queue = DispatchQueue(label: "workdoro.pixels", qos: .userInteractive)
+
+    @ObservationIgnored private var lastFrame = Double.nan
+    @ObservationIgnored private var busy = false
+    @ObservationIgnored private var pending: (() -> CGImage?)?
+
+    func submit(frame: Double, cols: Int, rows: Int, k: Int, draw: @escaping (Painter) -> Void) {
+        guard frame != lastFrame else { return }
+        lastFrame = frame
+        let work: () -> CGImage? = {
+            guard let bitmap = PixelBitmaps.shared.bitmap(cols: cols, rows: rows, k: k) else { return nil }
+            bitmap.clear()
+            draw(Painter(bitmap: bitmap))
+            return bitmap.image()
+        }
+        if image == nil && !busy {
+            // The very first frame gets a moment to finish, so a screen rarely opens blank, but it
+            // never holds up the main thread for long (the first town frame builds a lot of caches).
+            busy = true
+            let done = DispatchSemaphore(value: 0)
+            let box = ImageBox()
+            Self.queue.async {
+                box.image = work()
+                done.signal()
+                DispatchQueue.main.async {
+                    if self.image == nil || box.late { self.image = box.image }
+                    self.busy = false
+                    if let next = self.pending { self.pending = nil; self.run(next) }
+                }
+            }
+            if done.wait(timeout: .now() + 0.012) == .success {
+                image = box.image
+            } else {
+                box.late = true
+            }
+            return
+        }
+        if busy { pending = work; return }
+        run(work)
+    }
+
+    private func run(_ work: @escaping () -> CGImage?) {
+        busy = true
+        Self.queue.async {
+            let img = work()
+            DispatchQueue.main.async {
+                self.image = img
+                self.busy = false
+                if let next = self.pending {
+                    self.pending = nil
+                    self.run(next)
+                }
+            }
+        }
+    }
+}
+
+/// Hands a frame from the drawing queue back to the main thread.
+private final class ImageBox: @unchecked Sendable {
+    var image: CGImage?
+    var late = false
+}
+
+/// Reuses bitmaps of the same size between frames instead of making a new one each time.
+/// Only ever used on `PixelRenderJob.queue`.
+final class PixelBitmaps {
+    static let shared = PixelBitmaps()
+    private var pool: [String: PixelBitmap] = [:]
+
+    func bitmap(cols: Int, rows: Int, k: Int) -> PixelBitmap? {
+        let key = "\(cols)x\(rows)@\(k)"
+        if let hit = pool[key] { return hit }
+        guard let b = PixelBitmap(cols: cols, rows: rows, k: k) else { return nil }
+        if pool.count > 8 { pool.removeAll() }
+        pool[key] = b
+        return b
     }
 }
 

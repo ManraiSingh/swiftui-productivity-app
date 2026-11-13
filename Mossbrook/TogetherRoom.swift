@@ -193,7 +193,7 @@ enum TogetherRenderer {
 
     /// The room is drawn at `ox` across a canvas `cols` wide: anything wider gets more wall and floor.
     static func draw(_ p: Painter, t: Double, cols: Int, rows: Int, ox: Int, oy: Int, phase: DayPhase, weather: Weather,
-                     people: [Person], catHeart: Bool, rosieBusy: Bool) {
+                     people: [Person], catHeart: Bool, rosieBusy: Bool, quiet: Bool = false, party: Double? = nil) {
         let night = phase != .day
         wings(p, cols: cols, rows: rows, ox: ox, oy: oy, t: t, night: night)
         let r = p.shifted(dx: ox, dy: oy)
@@ -219,6 +219,8 @@ enum TogetherRenderer {
         } else {
             lights(r, t: t, strength: 0.25)
         }
+        if quiet { quietHours(r, cols: cols, rows: rows, ox: ox, oy: oy, people: people, t: t) }
+        if let party { confetti(r, age: party) }
         for person in people {
             if let e = person.emote {
                 emoteBubble(r, e, cx: Int(person.centerX), top: Int(person.headTop) - 18, age: person.emoteAge, t: t)
@@ -740,6 +742,34 @@ enum TogetherRenderer {
                 p.dot(x - 3 + (j * 4) % (w + 6), y - 3 + Int(k * 18), Color(hex: c).opacity(1 - k))
             }
         default: break
+        }
+    }
+
+    /// During a shared session the room hushes: lights dim, and each desk gets its own warm pool of lamplight.
+    static func quietHours(_ p: Painter, cols: Int, rows: Int, ox: Int, oy: Int, people: [Person], t: Double) {
+        p.rect(-ox, -oy, cols, rows, Color(hex: 0x1E1430).opacity(0.16))
+        for lx in [34, 94] { p.glow(Double(lx) + 0.5, 102, radius: 34, Color(hex: 0xFFD27A), 0.28) }
+        for person in people {
+            guard let s = person.seat, s.kind == .work, person.status == .focus else { continue }
+            // A soft screen glow on every face, breathing a little.
+            let k = 0.2 + 0.06 * sin(t * 1.6 + Double(person.seed))
+            p.glow(Double(s.x + 8), Double(s.y + 8), radius: 9, Color(hex: 0xBFE6FF), k)
+        }
+    }
+
+    /// Pixel confetti for the end of a shared session. `age` runs from 0 to about 4 seconds.
+    static func confetti(_ p: Painter, age: Double) {
+        let colors: [UInt32] = [0xF49AC1, 0xFFD54A, 0x7FD1B0, 0xA9C8F5, 0xF4845F, 0xC9A0F0]
+        let fade = max(0, min(1, (4 - age) / 1.2))
+        for i in 0..<90 {
+            let seed = Double(i) * 12.9898
+            let x = (sin(seed) * 43758.5453).truncatingRemainder(dividingBy: 1)
+            let speed = 34 + abs(sin(seed * 1.7)) * 30
+            let y = -8 + age * speed - abs(sin(seed * 3.1)) * 40
+            let sway = sin(age * 3 + seed) * 3
+            guard y > -6 && y < 240 else { continue }
+            let flip = Int(age * 8 + Double(i)) % 2 == 0
+            p.rect(Int(abs(x) * 128 + sway), Int(y), flip ? 3 : 2, flip ? 2 : 3, Color(hex: colors[i % colors.count]).opacity(fade))
         }
     }
 

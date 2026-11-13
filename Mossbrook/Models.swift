@@ -315,9 +315,13 @@ struct FocusSession: Identifiable, Codable, Hashable {
             let len = TimeInterval((br ? breakMinutes : minutes) * 60)
             list.append((s, s.addingTimeInterval(len), br, r))
             s = s.addingTimeInterval(len)
-            if br { br = false; r += 1 }
-            else if r >= rounds { break }
+            if br {
+                // The break after the last round ends the session.
+                if r >= rounds { break }
+                br = false; r += 1
+            }
             else if breakMinutes > 0 { br = true }
+            else if r >= rounds { break }
             else { r += 1 }
         }
         return list
@@ -394,6 +398,8 @@ struct SaveData: Codable {
     var letterDay: String?
     var habits: [Habit] = []
     var treatsSpent = 0
+    /// Focus sessions finished with others in the Together House. Each one bakes a bonus treat.
+    var togetherSessions = 0
     var friendship: [String: Int] = [:]
     /// Ids of letters, notes and habits you deleted, with when, so iCloud doesn't bring them back.
     var deleted: [String: Date] = [:]
@@ -422,6 +428,7 @@ struct SaveData: Codable {
         letterDay = try c.decodeIfPresent(String.self, forKey: .letterDay)
         habits = try c.decodeIfPresent([Habit].self, forKey: .habits) ?? []
         treatsSpent = try c.decodeIfPresent(Int.self, forKey: .treatsSpent) ?? 0
+        togetherSessions = try c.decodeIfPresent(Int.self, forKey: .togetherSessions) ?? 0
         friendship = try c.decodeIfPresent([String: Int].self, forKey: .friendship) ?? [:]
         deleted = try c.decodeIfPresent([String: Date].self, forKey: .deleted) ?? [:]
     }

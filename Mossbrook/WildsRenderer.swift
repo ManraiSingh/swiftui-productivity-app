@@ -89,6 +89,7 @@ extension VillageRenderer {
         })
         let s = p.s
         let top = CGFloat(groundTop) * s, tall = CGFloat(WH - groundTop) * s, band = CGFloat(M) * s
+        p.flush()
         p.ctx.fill(Path(CGRect(x: 0, y: top, width: band, height: tall)),
                    with: .linearGradient(fade, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: band, y: 0)))
         let right = CGFloat(WW) * s
@@ -115,11 +116,7 @@ extension VillageRenderer {
         let M = VillageLayout.margin
         let WW = VillageLayout.worldWidth
         let WH = VillageLayout.worldHeight
-        for i in 0..<14 {
-            let x = noise(i, 17) % WW
-            if (M..<(M + W)).contains(x) { continue }
-            if (noise(i, 3) + Int(t * 2)) % 6 != 0 { p.dot(x, noise(i, 23) % 40, Color.white.opacity(0.7)) }
-        }
+        worldStars(p, t: t, inTown: false)
         do {
             for k in 0..<14 {
                 let fx = Double(noise(k, 61) % WW) + 4 * sin(t * 0.7 + Double(k))
@@ -181,7 +178,7 @@ final class WildsCache {
         let scale: CGFloat = 2
         let w = CGFloat(VillageLayout.worldWidth), h = CGFloat(VillageLayout.worldHeight)
         let renderer = ImageRenderer(content:
-            Canvas { ctx, _ in VillageRenderer.wildsBase(Painter(ctx: ctx, s: scale), state: state) }
+            Canvas { ctx, _ in Painter.batched(ctx, s: scale) { VillageRenderer.wildsBase($0, state: state) } }
                 .frame(width: w * scale, height: h * scale)
         )
         renderer.scale = 1
