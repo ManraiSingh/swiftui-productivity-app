@@ -324,10 +324,9 @@ struct StudyHallView: View {
                 taken.insert(spot.id)
             }
             let mine = v.id == hall.me?.id
-            // Quiet hours: nobody at a desk pops bubbles while the session runs.
-            let hushed = seat?.kind == .work && TogetherSchedule.slot(at: Date()).focusing(at: Date())
-            let sayIndex = hushed ? nil : motion.say(v, now: now)
-            let emote = sayIndex == nil && !hushed ? motion.emote(v, now: now) : nil
+            // Reactions and one-tap messages show at any time, during a focus session too.
+            let sayIndex = motion.say(v, now: now)
+            let emote = sayIndex == nil ? motion.emote(v, now: now) : nil
             let seed = v.id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) % 9973 }
             let heading = TogetherRoom.spot(v.spot)
             let drawn = TogetherRenderer.Person(
