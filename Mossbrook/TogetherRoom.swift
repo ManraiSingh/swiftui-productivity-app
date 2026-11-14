@@ -200,6 +200,7 @@ enum TogetherRenderer {
         sunlight(r, phase: phase)
         wall(r, t: t, phase: phase, weather: weather)
         counter(r, t: t, busy: rosieBusy)
+        host(r, t: t)
 
         let walkers = people.filter { $0.seat == nil }
         func walkersBetween(_ lo: Double, _ hi: Double) {
@@ -470,6 +471,14 @@ enum TogetherRenderer {
     }
 
     // MARK: The counter
+
+    /// Lumi, who runs the house, by the fireplace: a little bob, and a look around every few seconds.
+    static func host(_ p: Painter, t: Double) {
+        let bob = Int(t * 1.5) % 2 == 0 ? -1 : 0
+        let x = 100, feet = 76
+        p.rect(x + 4, feet - 1, 8, 1, ink.opacity(0.18))
+        p.sprite(Sprites.lumi, x: x, y: feet - 16 + bob, flip: Int(t / 4) % 2 == 0)
+    }
 
     static func counter(_ p: Painter, t: Double, busy: Bool) {
         // Rosie bustles about when someone is ordering.

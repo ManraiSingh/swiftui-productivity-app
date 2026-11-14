@@ -256,6 +256,25 @@ struct Painter {
         ctx.fill(path, with: .color(color))
     }
 
+    /// A linear gradient over a rect, both given in canvas points (already scaled by `s`).
+    func fillLinear(_ r: CGRect, _ g: Gradient, from a: CGPoint, to b: CGPoint) {
+        if let bitmap {
+            let env = EnvironmentValues()
+            let colors = g.stops.map { $0.color.resolve(in: env).cgColor } as CFArray
+            var locs = g.stops.map { CGFloat($0.location) }
+            guard let cg = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors, locations: &locs) else { return }
+            let c = bitmap.cg
+            c.saveGState()
+            c.clip(to: r.offsetBy(dx: ox, dy: oy))
+            c.drawLinearGradient(cg, start: CGPoint(x: a.x + ox, y: a.y + oy), end: CGPoint(x: b.x + ox, y: b.y + oy),
+                                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            c.restoreGState()
+            return
+        }
+        flush()
+        ctx.fill(Path(r), with: .linearGradient(g, startPoint: a, endPoint: b))
+    }
+
     /// Sends any gathered squares to the canvas, before drawing something straight onto it.
     func flush() { batch?.flush() }
 
@@ -605,6 +624,29 @@ enum Sprites {
     ], [
         "k": ink, "r": Color(hex: 0xE07A5F), "w": Color(hex: 0xFFF6E5), "h": Color(hex: 0x6B4A2E),
         "s": skin, "b": blush, "m": mouth, "g": Color(hex: 0x81B29A), "p": Color(hex: 0x3D3F63)
+    ])
+
+    /// Lumi, who runs the Together House: plum beanie with a pom-pom, focus headphones, a cosy sweater.
+    static let lumi = Sprite([
+        "................",
+        "......kkkk......",
+        ".....kwwwwk.....",
+        "....kddddddk....",
+        "...kddddddddk...",
+        "..kqddddddddqk..",
+        "..kqssksssksqk..",
+        "..kqsbsssssbqk..",
+        "...ksssmmsssk...",
+        "....kssssssk....",
+        "....kkkkkkkk....",
+        "...kpppwwpppk...",
+        "..kpppprrppppk..",
+        "..ksppppppppsk..",
+        "...knnnkknnnk...",
+        "...kkkk..kkkk..."
+    ], [
+        "k": ink, "w": Color(hex: 0xFFF6E5), "d": Color(hex: 0x8E5A8A), "q": Color(hex: 0x5FA8A0),
+        "s": skin, "b": blush, "m": mouth, "p": Color(hex: 0xB9A6F0), "r": Color(hex: 0xC2577A), "n": Color(hex: 0x3D3F63)
     ])
 
     static let fern = mo.recolored(["h": Color(hex: 0x3E6B48), "c": Color(hex: 0xE0A458), "o": Color(hex: 0x4A6FA5)])

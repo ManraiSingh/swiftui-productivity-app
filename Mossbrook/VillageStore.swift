@@ -524,7 +524,7 @@ final class VillageStore {
     func advanceFocus(now: Date = Date()) {
         var changed = false
         var rang = false
-        while let s = activeFocus, s.end <= now {
+        while let s = activeFocus, !s.isPaused, s.end <= now {
             changed = true
             let at = s.end
             let fresh = now.timeIntervalSince(at) < 8
@@ -595,6 +595,29 @@ final class VillageStore {
             toast = Toast(speaker: .bea, text: "Last sip! +\(count(s.totalWorkMinutes, "minute")) of focus.")
             checkStory()
         }
+    }
+
+    /// Freezes the timer (a phone call, the door). Shared Together House sessions can't be paused.
+    func pauseFocus() {
+        guard var s = activeFocus, !s.isPaused, s.title != LiveFocus.togetherTitle else { return }
+        s.pausedAt = Date()
+        cancelAlarms(s)
+        activeFocus = s
+        save()
+        LiveFocus.sync(s)
+        LiveFocus.publish(self)
+    }
+
+    /// Carries on from exactly where it was paused.
+    func resumeFocus() {
+        guard var s = activeFocus, let at = s.pausedAt else { return }
+        s.start = s.start.addingTimeInterval(max(0, Date().timeIntervalSince(at)))
+        s.pausedAt = nil
+        activeFocus = s
+        save()
+        scheduleAlarms(s)
+        LiveFocus.sync(s)
+        LiveFocus.publish(self)
     }
 
     func skipBreak() {

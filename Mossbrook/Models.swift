@@ -300,10 +300,17 @@ struct FocusSession: Identifiable, Codable, Hashable {
     var rounds = 1
     var round = 1
     var onBreak = false
+    /// Set while the timer is paused. The end keeps sliding forward, so the time left stays frozen.
+    var pausedAt: Date?
+
+    var isPaused: Bool { pausedAt != nil }
 
     /// `start` is when the current work block or break began.
     var phaseMinutes: Int { onBreak ? breakMinutes : minutes }
-    var end: Date { start.addingTimeInterval(TimeInterval(phaseMinutes * 60)) }
+    var end: Date {
+        let paused = pausedAt.map { max(0, Date().timeIntervalSince($0)) } ?? 0
+        return start.addingTimeInterval(TimeInterval(phaseMinutes * 60) + paused)
+    }
     var duration: TimeInterval { TimeInterval(phaseMinutes * 60) }
     var totalWorkMinutes: Int { minutes * rounds }
 
@@ -342,6 +349,7 @@ extension FocusSession {
         rounds = try c.decodeIfPresent(Int.self, forKey: .rounds) ?? 1
         round = try c.decodeIfPresent(Int.self, forKey: .round) ?? 1
         onBreak = try c.decodeIfPresent(Bool.self, forKey: .onBreak) ?? false
+        pausedAt = try c.decodeIfPresent(Date.self, forKey: .pausedAt)
     }
 }
 

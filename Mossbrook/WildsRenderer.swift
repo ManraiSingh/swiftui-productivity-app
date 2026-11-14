@@ -89,16 +89,12 @@ extension VillageRenderer {
         })
         let s = p.s
         let top = CGFloat(groundTop) * s, tall = CGFloat(WH - groundTop) * s, band = CGFloat(M) * s
-        p.flush()
-        p.ctx.fill(Path(CGRect(x: 0, y: top, width: band, height: tall)),
-                   with: .linearGradient(fade, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: band, y: 0)))
+        p.fillLinear(CGRect(x: 0, y: top, width: band, height: tall), fade, from: CGPoint(x: 0, y: 0), to: CGPoint(x: band, y: 0))
         let right = CGFloat(WW) * s
-        p.ctx.fill(Path(CGRect(x: right - band, y: top, width: band, height: tall)),
-                   with: .linearGradient(fade, startPoint: CGPoint(x: right, y: 0), endPoint: CGPoint(x: right - band, y: 0)))
+        p.fillLinear(CGRect(x: right - band, y: top, width: band, height: tall), fade, from: CGPoint(x: right, y: 0), to: CGPoint(x: right - band, y: 0))
         let bm = VillageLayout.bottomMargin
         let bottom = CGFloat(H + bm) * s, bandB = CGFloat(bm) * s
-        p.ctx.fill(Path(CGRect(x: 0, y: bottom - bandB, width: right, height: bandB)),
-                   with: .linearGradient(fade, startPoint: CGPoint(x: 0, y: bottom), endPoint: CGPoint(x: 0, y: bottom - bandB)))
+        p.fillLinear(CGRect(x: 0, y: bottom - bandB, width: right, height: bandB), fade, from: CGPoint(x: 0, y: bottom), to: CGPoint(x: 0, y: bottom - bandB))
 
         switch state.phase {
         case .day: break
@@ -166,8 +162,8 @@ extension VillageRenderer {
 /// The still part of the woods, drawn once per look (time of day, weather, season) at two
 /// pictures-pixels per art pixel and then just scaled up. Pixel art scales up perfectly with
 /// nearest-neighbour sampling, so zooming never needs a redraw.
-@MainActor
-final class WildsCache {
+/// Only used from the pixel drawing queue (`PixelRenderJob.queue`), never the main thread.
+final class WildsCache: @unchecked Sendable {
     static let shared = WildsCache()
     private var key = ""
     private var image: CGImage?
@@ -175,14 +171,9 @@ final class WildsCache {
     func image(for state: SceneState) -> CGImage? {
         let k = "\(state.phase)-\(state.weather)-\(state.season)"
         if k == key, let image { return image }
-        let scale: CGFloat = 2
-        let w = CGFloat(VillageLayout.worldWidth), h = CGFloat(VillageLayout.worldHeight)
-        let renderer = ImageRenderer(content:
-            Canvas { ctx, _ in Painter.batched(ctx, s: scale) { VillageRenderer.wildsBase($0, state: state) } }
-                .frame(width: w * scale, height: h * scale)
-        )
-        renderer.scale = 1
-        image = renderer.cgImage
+        guard let b = PixelBitmap(cols: VillageLayout.worldWidth, rows: VillageLayout.worldHeight, k: 2) else { return nil }
+        VillageRenderer.wildsBase(Painter(bitmap: b), state: state)
+        image = b.image()
         key = k
         return image
     }

@@ -524,7 +524,7 @@ struct FocusWidgetView: View {
     private var range: ClosedRange<Date> { phase.start...max(phase.end, phase.start.addingTimeInterval(1)) }
     private var label: String {
         let r = snap.rounds > 1 ? " · \(phase.round)/\(snap.rounds)" : ""
-        return (phase.onBreak ? "BREAK" : "FOCUSING") + r
+        return (snap.pausedLeft != nil ? "PAUSED" : (phase.onBreak ? "BREAK" : "FOCUSING")) + r
     }
 
     var body: some View {
@@ -538,12 +538,12 @@ struct FocusWidgetView: View {
     private var small: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(timerInterval: range, countsDown: true)
+                FocusClock(range: range, pausedLeft: snap.pausedLeft)
                     .font(.cozy(18, .heavy))
                     .foregroundStyle(WP.ink)
                     .monospacedDigit()
                     .frame(width: 62, alignment: .leading)
-                Text(phase.onBreak ? "BREAK" : (snap.rounds > 1 ? "\(phase.round)/\(snap.rounds)" : "FOCUS"))
+                Text(snap.pausedLeft != nil ? "PAUSED" : (phase.onBreak ? "BREAK" : (snap.rounds > 1 ? "\(phase.round)/\(snap.rounds)" : "FOCUS")))
                     .font(.cozy(8, .heavy))
                     .foregroundStyle(phase.onBreak ? WP.leaf : WP.orange)
             }
@@ -569,11 +569,11 @@ struct FocusWidgetView: View {
                     .font(.cozy(13, .heavy))
                     .foregroundStyle(WP.ink)
                     .lineLimit(2)
-                Text(timerInterval: range, countsDown: true)
+                FocusClock(range: range, pausedLeft: snap.pausedLeft)
                     .font(.cozy(26, .heavy))
                     .foregroundStyle(WP.ink)
                     .monospacedDigit()
-                ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                FocusBar(range: range, pausedLeft: snap.pausedLeft, total: snap.pausedTotal ?? 1)
                     .tint(phase.onBreak ? WP.leaf : WP.orange)
                 if snap.rounds > 1 { roundDots }
             }
@@ -596,13 +596,13 @@ struct FocusWidgetView: View {
                     if snap.rounds > 1 { roundDots }
                 }
                 Spacer()
-                Text(timerInterval: range, countsDown: true)
+                FocusClock(range: range, pausedLeft: snap.pausedLeft)
                     .font(.cozy(30, .heavy))
                     .foregroundStyle(WP.ink)
                     .monospacedDigit()
                     .frame(width: 120, alignment: .trailing)
             }
-            ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+            FocusBar(range: range, pausedLeft: snap.pausedLeft, total: snap.pausedTotal ?? 1)
                 .tint(phase.onBreak ? WP.leaf : WP.orange)
         }
         .containerBackground(WP.paper, for: .widget)
@@ -818,20 +818,28 @@ struct TodayView: View {
         let range = phase.start...max(phase.end, phase.start.addingTimeInterval(1))
         switch family {
         case .accessoryCircular:
-            ProgressView(timerInterval: range, countsDown: true) { EmptyView() } currentValueLabel: {
-                Image(systemName: phase.onBreak ? "cup.and.saucer.fill" : "laptopcomputer")
+            Group {
+                if let left = snap.pausedLeft {
+                    ProgressView(value: max(0, min(1, left / max(snap.pausedTotal ?? 1, 1)))) {
+                        EmptyView()
+                    } currentValueLabel: { Image(systemName: "pause.fill") }
+                } else {
+                    ProgressView(timerInterval: range, countsDown: true) { EmptyView() } currentValueLabel: {
+                        Image(systemName: phase.onBreak ? "cup.and.saucer.fill" : "laptopcomputer")
+                    }
+                }
             }
             .progressViewStyle(.circular)
             .containerBackground(for: .widget) { AccessoryWidgetBackground() }
         case .accessoryInline:
-            Text(timerInterval: range, countsDown: true).containerBackground(for: .widget) { Color.clear }
+            FocusClock(range: range, pausedLeft: snap.pausedLeft).containerBackground(for: .widget) { Color.clear }
         default:
             VStack(alignment: .leading, spacing: 1) {
-                Text(phase.onBreak ? "ON A BREAK" : (snap.focusTitle ?? "FOCUS").uppercased())
+                Text(snap.pausedLeft != nil ? "PAUSED" : (phase.onBreak ? "ON A BREAK" : (snap.focusTitle ?? "FOCUS").uppercased()))
                     .font(.system(size: 10, weight: .heavy, design: .monospaced))
                     .lineLimit(1)
-                Text(timerInterval: range, countsDown: true).font(.system(size: 20, weight: .bold, design: .monospaced))
-                ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                FocusClock(range: range, pausedLeft: snap.pausedLeft).font(.system(size: 20, weight: .bold, design: .monospaced))
+                FocusBar(range: range, pausedLeft: snap.pausedLeft, total: snap.pausedTotal ?? 1)
             }
             .containerBackground(for: .widget) { AccessoryWidgetBackground() }
         }
@@ -858,3 +866,38 @@ extension WidgetFamily {
     var isHome: Bool { [.systemSmall, .systemMedium, .systemLarge].contains(self) }
 }
 
+
+
+/// A countdown that ticks on its own, or a frozen time while the timer is paused.
+struct FocusClock: View {
+    let range: ClosedRange<Date>
+    let pausedLeft: Double?
+
+    var body: some View {
+        if let left = pausedLeft {
+            Text(Self.format(left))
+        } else {
+            Text(timerInterval: range, countsDown: true)
+        }
+    }
+
+    static func format(_ seconds: Double) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// A progress bar that fills on its own, or stays put while the timer is paused.
+struct FocusBar: View {
+    let range: ClosedRange<Date>
+    let pausedLeft: Double?
+    let total: Double
+
+    var body: some View {
+        if let left = pausedLeft {
+            ProgressView(value: max(0, min(1, 1 - left / max(total, 1))))
+        } else {
+            ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+        }
+    }
+}

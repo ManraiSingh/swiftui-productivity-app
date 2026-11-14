@@ -505,7 +505,11 @@ struct CafeHUD: View {
                         } else {
                             FocusCard(
                                 title: session.rounds > 1 ? "\(session.title) · \(session.round)/\(session.rounds)" : session.title,
-                                fill: fill, leave: { store.cancelFocus() }, strict: openStrict
+                                fill: fill, leave: { store.cancelFocus() }, strict: session.isPaused ? nil : openStrict,
+                                paused: session.isPaused,
+                                togglePause: session.title == LiveFocus.togetherTitle ? nil : {
+                                    if session.isPaused { store.resumeFocus() } else { store.pauseFocus() }
+                                }
                             )
                         }
                     }
@@ -759,8 +763,8 @@ struct FocusCard: View {
     let fill: Double
     let leave: () -> Void
     var strict: (() -> Void)? = nil
-    @State private var hold: Double = 0
-
+    var paused = false
+    var togglePause: (() -> Void)? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             GeometryReader { geo in
@@ -775,7 +779,7 @@ struct FocusCard: View {
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("FOCUSING ON")
+                    Text(paused ? "PAUSED" : "FOCUSING ON")
                         .font(.pixel(10))
                         .foregroundStyle(Theme.muted)
                     Text(title)
@@ -784,6 +788,20 @@ struct FocusCard: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
+                if let togglePause {
+                    Button(action: togglePause) {
+                        VStack(spacing: 1) {
+                            Image(systemName: paused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 15, weight: .heavy))
+                            Text(paused ? "RESUME" : "PAUSE")
+                                .font(.pixel(8, .heavy))
+                        }
+                        .foregroundStyle(Theme.ink)
+                        .frame(width: 48, height: 44)
+                    }
+                    .buttonStyle(PixelButtonStyle(fill: paused ? Color(hex: 0xB8F0C8) : Theme.card, hPad: 0))
+                    .accessibilityLabel(paused ? "Resume the timer" : "Pause the timer")
+                }
                 if let strict {
                     Button(action: strict) {
                         VStack(spacing: 1) {
@@ -793,38 +811,13 @@ struct FocusCard: View {
                                 .font(.pixel(8, .heavy))
                         }
                         .foregroundStyle(Theme.ink)
-                        .frame(width: 52, height: 44)
+                        .frame(width: 48, height: 44)
                     }
                     .buttonStyle(PixelButtonStyle(fill: Theme.gold, hPad: 0))
                     .accessibilityLabel("Strict mode")
                 }
-                Text("Hold to leave")
-                    .font(.pixel(13, .heavy))
-                    .foregroundStyle(Theme.cream)
-                    .padding(.horizontal, 14)
-                    .frame(height: 44)
-                    .background(alignment: .leading) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Rectangle().fill(Theme.red)
-                                Rectangle().fill(Color(hex: 0x8E2E2B)).frame(width: geo.size.width * hold)
-                            }
-                        }
-                    }
-                    .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
-                    .background(Rectangle().fill(Theme.ink).offset(x: 3, y: 3))
-                    .onLongPressGesture(minimumDuration: 1.2) {
-                        hold = 0
-                        leave()
-                    } onPressingChanged: { pressing in
-                        withAnimation(pressing ? .linear(duration: 1.2) : .easeOut(duration: 0.2)) {
-                            hold = pressing ? 1 : 0
-                        }
-                    }
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Leave the café early")
-                    .accessibilityAction { leave() }
             }
+            SlideToLeave(action: leave)
         }
         .padding(14)
         .pixelBox(Theme.card)
@@ -927,5 +920,66 @@ struct SeatBubble: View {
             .padding(.vertical, 2)
             .background(highlight ? Theme.beaOrange : Color(hex: 0xF4E3B5))
             .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 1.5))
+    }
+}
+
+
+/// Drag the cup all the way to the right to leave the café. A deliberate swipe, so a stray tap never ends a session.
+struct SlideToLeave: View {
+    var title = "Slide to leave"
+    var icon = "cup.and.saucer.fill"
+    let action: () -> Void
+    @State private var drag: CGFloat = 0
+    @State private var done = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let knob: CGFloat = 52
+            let track = max(1, geo.size.width - knob - 6)
+            let k = min(1, drag / track)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color(hex: 0xF3D9C8))
+                Rectangle().fill(Theme.red.opacity(0.85)).frame(width: knob + 3 + drag)
+                Text("\(title)  ›››")
+                    .font(.pixel(13, .heavy))
+                    .foregroundStyle(Theme.red)
+                    .opacity(1 - Double(k) * 1.6)
+                    .frame(maxWidth: .infinity)
+                    .padding(.leading, knob)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .heavy))
+                    .foregroundStyle(Theme.cream)
+                    .frame(width: knob, height: 38)
+                    .background(Theme.red)
+                    .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
+                    .offset(x: 3 + drag)
+                    .gesture(
+                        DragGesture(minimumDistance: 2)
+                            .onChanged { v in
+                                guard !done else { return }
+                                drag = min(max(0, v.translation.width), track)
+                            }
+                            .onEnded { _ in
+                                guard !done else { return }
+                                if drag >= track * 0.92 {
+                                    done = true
+                                    drag = track
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    action()
+                                } else {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { drag = 0 }
+                                }
+                            }
+                    )
+            }
+            .frame(height: 44)
+            .overlay(Rectangle().strokeBorder(Theme.ink, lineWidth: 2))
+            .background(Rectangle().fill(Theme.ink).offset(x: 3, y: 3))
+        }
+        .frame(height: 44)
+        .accessibilityElement()
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
     }
 }

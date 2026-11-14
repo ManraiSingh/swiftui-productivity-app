@@ -40,9 +40,9 @@ struct RootView: View {
                     maxZoom: 2,
                     snapStep: 1 / defaultDots(geo.size.width),
                     bottomInset: VillageDrawer.collapsedHeight - 20,
-                    focus: tourFocus(base: base) ?? (Self.debugZoomOut ? CGPoint(x: CGFloat(VillageLayout.worldWidth) * base / 2, y: CGFloat(VillageLayout.worldHeight) * base * 0.35) : nil),
+                    focus: tourFocus(base: base) ?? (Self.debugPeekEdge ? CGPoint(x: CGFloat(VillageLayout.worldWidth) * base * (Self.debugPeekTogether ? 0.67 : (Self.debugPeekLeft ? 0.2 : 0.82)), y: CGFloat(VillageLayout.worldHeight) * base * (Self.debugPeekTogether ? 0.66 : (Self.debugPeekLeft ? 0.2 : 0.5))) : (Self.debugZoomOut ? CGPoint(x: CGFloat(VillageLayout.worldWidth) * base / 2, y: CGFloat(VillageLayout.worldHeight) * base * 0.35) : nil)),
                     focusZoom: store.showTour ? (tourIntro ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : 1)
-                        : (Self.debugZoomOut ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : nil),
+                        : (Self.debugPeekEdge ? 2 : (Self.debugZoomOut ? dotRange(geo.size.width).0 / defaultDots(geo.size.width) : nil)),
                     onChange: { z, offset in
                         camera.zoom = z
                         camera.offset = offset
@@ -152,8 +152,18 @@ struct RootView: View {
             if args.contains("-openHall") { showStudyHall = true }
             if args.contains("-openMeeting") { showTownHall = true }
             if args.contains("-openCafe") { showCafe = true }
+            if let i = args.firstIndex(of: "-openVillager"), i + 1 < args.count, let v = VillagerID(rawValue: args[i + 1]) { openVillager = v }
+            if args.contains("-cafeSeated") {
+                store.cancelFocusQuietly()
+                store.startFocus(title: "Write the report", drink: .latte, letterID: nil, seat: 2, minutes: 25)
+                if args.contains("-paused") { store.pauseFocus() }
+                showCafe = true
+            }
+            if let i = args.firstIndex(of: "-weather"), i + 1 < args.count,
+               let w = Weather.allCases.first(where: { "\($0)" == args[i + 1] }) { store.weatherOverride = w }
             if args.contains("-openGreenhouse") { showGreenhouse = true }
             #endif
+            VillageRenderer.prewarm(SceneState(store))
             SoundFX.installTapListener()
             store.applyWidgetDeliveries()
             store.resumeFocusIfNeeded()
@@ -185,7 +195,7 @@ struct RootView: View {
             }
         }
         .task(id: focusKey) {
-            guard let session = store.activeFocus else { return }
+            guard let session = store.activeFocus, !session.isPaused else { return }
             let wait = session.end.timeIntervalSinceNow
             if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
             if !Task.isCancelled { store.advanceFocus() }
@@ -207,8 +217,14 @@ struct RootView: View {
     /// Debug builds: launch with -zoomOut to open the map fully zoomed out, for checking the edges of the world.
     #if DEBUG
     static let debugZoomOut = ProcessInfo.processInfo.arguments.contains("-zoomOut")
+    static let debugPeekTogether = ProcessInfo.processInfo.arguments.contains("-peekTogether")
+    static let debugPeekLeft = ProcessInfo.processInfo.arguments.contains("-peekLeft")
+    static let debugPeekEdge = debugPeekTogether || debugPeekLeft || ProcessInfo.processInfo.arguments.contains("-peekEdge")
     #else
     static let debugZoomOut = false
+    static let debugPeekEdge = false
+    static let debugPeekTogether = false
+    static let debugPeekLeft = false
     #endif
 
     /// The normal view is as far out as the map goes (so the world always fills the screen and
@@ -246,7 +262,7 @@ struct RootView: View {
 
     private var focusKey: String {
         guard let s = store.activeFocus else { return "none" }
-        return "\(s.id)-\(s.round)-\(s.onBreak)-\(s.start.timeIntervalSince1970)"
+        return "\(s.id)-\(s.round)-\(s.onBreak)-\(s.start.timeIntervalSince1970)-\(s.isPaused)"
     }
 
     private func open(_ villager: VillagerID) {
@@ -476,7 +492,7 @@ struct CafeMiniCard: View {
                             .foregroundStyle(Theme.ink)
                         if let session = store.activeFocus {
                             TimelineView(.periodic(from: .now, by: 1)) { tl in
-                                Text(FocusFormat.clock(session.end.timeIntervalSince(tl.date)))
+                                Text(session.isPaused ? "Paused · \(FocusFormat.clock(session.end.timeIntervalSince(tl.date)))" : FocusFormat.clock(session.end.timeIntervalSince(tl.date)))
                                     .font(.pixel(10, .semibold))
                                     .foregroundStyle(Theme.beaOrange)
                             }

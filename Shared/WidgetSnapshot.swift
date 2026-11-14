@@ -32,6 +32,9 @@ struct WidgetSnapshot: Codable {
     var habitsTotal = 0
     var cafeMinutes = 0
     var treats = 0
+    /// While the café timer is paused: seconds left and the phase's full length. Nil when running.
+    var pausedLeft: Double? = nil
+    var pausedTotal: Double? = nil
 
     static let group = "group.com.manraisingh.workdoro"
     private static let key = "snapshot"
@@ -69,6 +72,7 @@ struct WidgetSnapshot: Codable {
 
     func phase(at date: Date) -> Phase? {
         guard focusTitle != nil else { return nil }
+        if pausedLeft != nil { return phases.first }
         return phases.first { $0.start <= date && date < $0.end }
     }
 

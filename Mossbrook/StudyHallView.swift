@@ -93,6 +93,7 @@ struct StudyHallView: View {
     @State private var picking = 0
     /// The shared session you're in, or saving a seat for.
     @State private var joinedSlot: TogetherSchedule.Slot?
+    @State private var askLeave = false
     /// When the last shared session you were in ended, for the little party.
     @State private var partyAt: Date?
     /// The little "you did it" card after a shared session, with how many people you focused with.
@@ -228,6 +229,18 @@ struct StudyHallView: View {
         .onChange(of: hall.visible.count) {
             TogetherHouseInfo.save(count: hall.visible.count + (hall.joined ? 1 : 0))
             WidgetCenter.shared.reloadTimelines(ofKind: "TogetherWidget")
+        }
+        .confirmationDialog("Leave the Together House?", isPresented: $askLeave, titleVisibility: .visible) {
+            if let slot = joinedSlot, Date() < slot.start {
+                Button("Leave & remind me at \(TogetherSchedule.label(slot.start))") {
+                    if !reminders.isBooked(slot.start) { reminders.toggle(slot.start) }
+                    dismiss()
+                }
+            }
+            Button("Leave", role: .destructive) { dismiss() }
+            Button("Stay", role: .cancel) {}
+        } message: {
+            Text("You'll disappear from the room for everyone else.")
         }
         .confirmationDialog(picked?.name ?? "", isPresented: Binding(get: { picked != nil }, set: { if !$0 { picked = nil } }), titleVisibility: .visible) {
             if let person = picked {
@@ -611,7 +624,10 @@ struct StudyHallView: View {
     }
 
     private var closeButton: some View {
-        Button { dismiss() } label: {
+        Button {
+            // Focusing in a session: close and keep the desk. Otherwise, check before leaving the room.
+            if hall.joined && store.activeFocus == nil { askLeave = true } else { dismiss() }
+        } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 15, weight: .heavy))
                 .foregroundStyle(Theme.ink)

@@ -14,6 +14,9 @@ struct FocusActivityAttributes: ActivityAttributes {
         /// In a Together House session, and how many people are focusing in it.
         var together: Bool? = nil
         var people: Int? = nil
+        /// Paused: the timer is frozen with `left` seconds to go.
+        var paused: Bool? = nil
+        var left: Double? = nil
     }
 
     var name: String

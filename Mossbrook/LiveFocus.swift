@@ -24,9 +24,11 @@ enum LiveFocus {
                 title: s.title, start: s.start, end: s.end, onBreak: s.onBreak,
                 round: s.round, rounds: s.rounds, drinkHex: drinkHex(s.drink),
                 together: s.title == togetherTitle ? true : nil,
-                people: s.title == togetherTitle ? togetherPeople : nil
+                people: s.title == togetherTitle ? togetherPeople : nil,
+                paused: s.isPaused ? true : nil,
+                left: s.isPaused ? s.end.timeIntervalSinceNow : nil
             )
-            let content = ActivityContent(state: state, staleDate: s.end.addingTimeInterval(120))
+            let content = ActivityContent(state: state, staleDate: s.isPaused ? nil : s.end.addingTimeInterval(120))
             if let activity = running.first {
                 await activity.update(content)
             } else if ActivityAuthorizationInfo().areActivitiesEnabled {
@@ -42,7 +44,14 @@ enum LiveFocus {
             snap.focusTitle = s.title
             snap.rounds = s.rounds
             snap.drinkHex = drinkHex(s.drink)
-            snap.phases = s.schedule.map { .init(start: $0.start, end: $0.end, onBreak: $0.onBreak, round: $0.round) }
+            if s.isPaused {
+                // Frozen: just the current phase, and how much of it is left.
+                snap.phases = [.init(start: s.start, end: s.end, onBreak: s.onBreak, round: s.round)]
+                snap.pausedLeft = s.end.timeIntervalSinceNow
+                snap.pausedTotal = s.duration
+            } else {
+                snap.phases = s.schedule.map { .init(start: $0.start, end: $0.end, onBreak: $0.onBreak, round: $0.round) }
+            }
         }
         let pending = Set(WidgetSnapshot.pendingDeliveries)
         let open = store.openLetters.filter { !pending.contains($0.id.uuidString) }

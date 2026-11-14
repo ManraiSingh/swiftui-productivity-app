@@ -41,10 +41,20 @@ final class SoundFX {
         if session.category == .soloAmbient {
             try? session.setCategory(.ambient, options: [.mixWithOthers])
         }
-        for sound in Sound.allCases { buffers[sound] = make(render(sound)) }
-        tapNotes = [1047.0, 1175, 1319, 1568, 1760, 1568, 1319, 1175].map { make(softNote($0)) }
-        // One little "voice" for each villager, at a different pitch.
-        blips = [659.0, 523.0, 784.0, 587.0, 880.0, 440.0].map { make(voice($0)) }
+        // The sounds are synthesized off the main thread, so the opening scene shows up straight away.
+        // Until they're ready, a play() call just does nothing.
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var built: [Sound: AVAudioPCMBuffer] = [:]
+            for sound in Sound.allCases { built[sound] = make(render(sound)) }
+            let notes = [1047.0, 1175, 1319, 1568, 1760, 1568, 1319, 1175].map { make(softNote($0)) }
+            // One little "voice" for each villager, at a different pitch.
+            let voices = [659.0, 523.0, 784.0, 587.0, 880.0, 440.0].map { make(voice($0)) }
+            DispatchQueue.main.async {
+                self.buffers = built
+                self.tapNotes = notes
+                self.blips = voices
+            }
+        }
         for _ in 0..<6 {
             let node = AVAudioPlayerNode()
             engine.attach(node)

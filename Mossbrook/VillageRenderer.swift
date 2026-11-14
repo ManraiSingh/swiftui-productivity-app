@@ -71,6 +71,19 @@ enum VillageLayout {
         }
     }
 
+    /// Lumi, the Together House host, strolls back and forth in front of the house.
+    static func lumiPose(t: Double, state: SceneState) -> Pose {
+        if state.touring { return Pose(x: 214, y: 236, facingLeft: true, walking: false) }
+        let a = 182.0, b = 216.0, cycle = 16.0
+        let p = (t + 2).truncatingRemainder(dividingBy: cycle)
+        switch p {
+        case ..<6: return Pose(x: a + (b - a) * p / 6, y: 236, facingLeft: false, walking: true)
+        case ..<8: return Pose(x: b, y: 236, facingLeft: true, walking: false)
+        case ..<14: return Pose(x: b - (b - a) * (p - 8) / 6, y: 236, facingLeft: true, walking: true)
+        default: return Pose(x: a, y: 236, facingLeft: false, walking: false)
+        }
+    }
+
     static func pose(_ villager: VillagerID, t: Double, state: SceneState) -> Pose {
         if state.touring {
             let s = tourSpot(villager)
@@ -227,7 +240,6 @@ enum VillageRenderer {
         lamps(p)
         villagers(p, t: t, state: state)
         groundLife(p, t: t, state: state, effects: effects)
-        if weather == .rain { p.rect(0, 0, W, H, Color(hex: 0x4A5A78).opacity(0.16)) }
 
         switch state.phase {
         case .day:
@@ -245,7 +257,6 @@ enum VillageRenderer {
             villagersOnTop(p, t: t, state: state, tints: [(0x0E1238, 0.48)])
             if weather != .rain && weather != .snow { fireflies(p, t: t) }
         }
-        weatherParticles(p, t: t)
         if !openSky { nightLife(p, t: t, state: state, effects: effects) }
     }
 
@@ -932,6 +943,31 @@ enum VillageRenderer {
                 umbrella(p, v, x: x, y: y, flip: pose.facingLeft, t: t, walking: pose.walking)
             }
         }
+        // Lumi, the Together House host.
+        let lp = VillageLayout.lumiPose(t: t, state: state)
+        let lb = lp.walking && Int(t * 6) % 2 == 0 ? -1 : 0
+        let lx = Int(lp.x) - 8, ly = Int(lp.y) - 16 + lb
+        p.rect(lx + 4, Int(lp.y) - 1, 8, 1, shadow)
+        p.sprite(Sprites.lumi, x: lx, y: ly, flip: lp.facingLeft)
+        if weather == .rain || weather == .snow {
+            lumiUmbrella(p, x: lx, y: ly, flip: lp.facingLeft, walking: lp.walking)
+        }
+    }
+
+    /// Lumi's umbrella: lavender with a plum trim, the Together House colours.
+    static func lumiUmbrella(_ p: Painter, x: Int, y: Int, flip: Bool, walking: Bool) {
+        let main = Color(hex: 0xB9A6F0), accent = Color(hex: 0xFFF6E5), trim = Color(hex: 0x8E5A8A)
+        let tilt = walking ? (flip ? 1 : -1) : 0
+        let cx = flip ? x + 5 : x + 11, top = y - 5
+        let hx = flip ? x + 2 : x + 14
+        p.rect(hx, top + 6, 1, 11, ink)
+        let rows = [1, 4, 6, 8, 9]
+        for (r, hw) in rows.enumerated() {
+            let ox = cx + tilt * (rows.count - r) / 3
+            p.rect(ox - hw - 1, top + r, hw * 2 + 3, 1, ink)
+            p.rect(ox - hw, top + r, hw * 2 + 1, 1, r == rows.count - 1 ? trim : main)
+        }
+        p.rect(cx - 1, top + 2, 3, 1, accent)
     }
 
     /// Each villager's own umbrella: (canopy, stripe or pattern, trim).
@@ -1076,8 +1112,8 @@ enum VillageRenderer {
 
 
 /// The still part of the town, drawn once per weather and season (see `WildsCache`).
-@MainActor
-final class TownBaseCache {
+/// Only used from the pixel drawing queue (`PixelRenderJob.queue`), never the main thread.
+final class TownBaseCache: @unchecked Sendable {
     static let shared = TownBaseCache()
     private var key = ""
     private var image: CGImage?
@@ -1085,15 +1121,21 @@ final class TownBaseCache {
     func image(for state: SceneState) -> CGImage? {
         let k = "\(state.weather)-\(state.season)"
         if k == key, let image { return image }
-        let scale: CGFloat = 2
-        let w = CGFloat(VillageLayout.width), h = CGFloat(VillageLayout.height)
-        let renderer = ImageRenderer(content:
-            Canvas { ctx, _ in Painter.batched(ctx, s: scale) { VillageRenderer.drawBase($0, state: state) } }
-                .frame(width: w * scale, height: h * scale)
-        )
-        renderer.scale = 1
-        image = renderer.cgImage
+        guard let b = PixelBitmap(cols: VillageLayout.width, rows: VillageLayout.height, k: 2) else { return nil }
+        VillageRenderer.drawBase(Painter(bitmap: b), state: state)
+        image = b.image()
         key = k
         return image
+    }
+}
+
+extension VillageRenderer {
+    /// Draws the still town and woods for today's look in the background at launch, so they're
+    /// ready by the time the opening scene ends instead of being built on the first town frame.
+    static func prewarm(_ state: SceneState) {
+        PixelRenderJob.queue.async {
+            _ = WildsCache.shared.image(for: state)
+            _ = TownBaseCache.shared.image(for: state)
+        }
     }
 }

@@ -57,10 +57,10 @@ struct FocusLiveActivity: Widget {
                         .font(.pixel(14, .heavy))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                    FocusBar(range: range, pausedLeft: st.paused == true ? st.left : nil, total: st.end.timeIntervalSince(st.start))
                         .tint(tint(st))
                 }
-                Text(timerInterval: range, countsDown: true)
+                FocusClock(range: range, pausedLeft: st.paused == true ? st.left : nil)
                     .font(.pixel(24, .heavy))
                     .foregroundStyle(.white)
                     .monospacedDigit()
@@ -80,7 +80,7 @@ struct FocusLiveActivity: Widget {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(timerInterval: range, countsDown: true)
+                    FocusClock(range: range, pausedLeft: st.paused == true ? st.left : nil)
                         .font(.pixel(22, .heavy))
                         .monospacedDigit()
                         .frame(width: 80, alignment: .trailing)
@@ -92,7 +92,7 @@ struct FocusLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    ProgressView(timerInterval: range, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                    FocusBar(range: range, pausedLeft: st.paused == true ? st.left : nil, total: st.end.timeIntervalSince(st.start))
                         .tint(tint(st))
                 }
             } compactLeading: {
@@ -102,11 +102,11 @@ struct FocusLiveActivity: Widget {
                         if let n = st.people, n > 1 { Text("\(n)").font(.pixel(12, .heavy)).foregroundStyle(Self.pink) }
                     }
                 } else {
-                    Image(systemName: st.onBreak ? "cup.and.saucer.fill" : "laptopcomputer")
+                    Image(systemName: st.paused == true ? "pause.fill" : (st.onBreak ? "cup.and.saucer.fill" : "laptopcomputer"))
                         .foregroundStyle(WP.gold)
                 }
             } compactTrailing: {
-                Text(timerInterval: range, countsDown: true)
+                FocusClock(range: range, pausedLeft: st.paused == true ? st.left : nil)
                     .monospacedDigit()
                     .frame(width: 46)
                     .foregroundStyle(together ? Self.pink : .white)
@@ -141,6 +141,6 @@ struct FocusLiveActivity: Widget {
     private func label(_ st: FocusActivityAttributes.ContentState) -> String {
         if st.together == true { return "FOCUSING TOGETHER" }
         let r = st.rounds > 1 ? " · ROUND \(st.round)/\(st.rounds)" : ""
-        return (st.onBreak ? "BREAK" : "FOCUSING") + r
+        return (st.paused == true ? "PAUSED" : (st.onBreak ? "BREAK" : "FOCUSING")) + r
     }
 }

@@ -170,26 +170,30 @@ extension VillageRenderer {
 
     // MARK: Weather
 
-    static func weatherParticles(_ p: Painter, t: Double) {
+    /// Rain, snow, petals or leaves over an area of `width`×`height` art pixels (the whole world, so the
+    /// weather doesn't stop at the edge of town).
+    static func weatherParticles(_ p: Painter, t: Double, width: Int = W, height: Int = H) {
+        let W = width, H = height
+        let more = Double(W * H) / Double(VillageRenderer.W * VillageRenderer.H)
         switch weather {
         case .clear:
             break
         case .rain:
-            for i in 0..<130 {
+            for i in 0..<Int(130 * more) {
                 let speed = 110 + Double(noise(i, 1) % 40)
                 let y = Int((Double(noise(i, 2) % H) + t * speed).truncatingRemainder(dividingBy: Double(H)))
                 let x = (noise(i, 3) % (W + 20)) - Int(Double(y) * 0.15) + 10
                 p.rect(x, y, 1, 3, Color(hex: 0xC8DCF0).opacity(0.55))
             }
-            for i in 0..<10 {
+            for i in 0..<Int(10 * more) {
                 let k = (t * 0.8 + Double(i) * 0.1).truncatingRemainder(dividingBy: 1)
                 let x = 8 + noise(i, 21) % (W - 16)
-                let y = groundTop + 30 + noise(i, 23) % 200
+                let y = groundTop + 30 + noise(i, 23) % max(1, H - groundTop - 40)
                 let r = Int(k * 3)
                 p.rect(x - r, y, 2 * r + 1, 1, Color(hex: 0xC8DCF0).opacity(0.5 * (1 - k)))
             }
         case .snow:
-            for i in 0..<140 {
+            for i in 0..<Int(140 * more) {
                 let speed = 8 + Double(noise(i, 1) % 10)
                 let y = Int((Double(noise(i, 2) % H) + t * speed).truncatingRemainder(dividingBy: Double(H)))
                 let x = noise(i, 3) % W + Int(3 * sin(t * 0.8 + Double(i)))
@@ -200,7 +204,7 @@ extension VillageRenderer {
             let colors: [UInt32] = weather == .petals
                 ? [0xF7B7CF, 0xF49AC1, 0xFFE4EE]
                 : [0xD9824A, 0xE8A25A, 0xC65F4A, 0xD9A441]
-            for i in 0..<54 {
+            for i in 0..<Int(54 * more) {
                 let speed = 10 + Double(noise(i, 1) % 8)
                 let y = Int((Double(noise(i, 2) % H) + t * speed).truncatingRemainder(dividingBy: Double(H)))
                 let drift = (t * 6 + Double(noise(i, 4) % W)).truncatingRemainder(dividingBy: Double(W + 20))

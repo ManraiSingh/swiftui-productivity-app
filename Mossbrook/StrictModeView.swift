@@ -112,6 +112,16 @@ struct StrictDesk: View {
                         )
                     }
                     .accessibilityLabel("You, \(activity.doing) at your desk. \(count(Int(max(0, remaining) / 60), "minute")) left.")
+                    .overlay(alignment: .top) {
+                        if session?.isPaused == true {
+                            Text("PAUSED · resume in the café")
+                                .font(.pixel(13, .heavy))
+                                .foregroundStyle(Theme.ink)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .pixelBox(Theme.gold, shadow: 2)
+                                .padding(.top, 14)
+                        }
+                    }
 
                     if introSeen {
                         // Pinned by its bottom-left corner, so the list can open upwards over the desk.
@@ -198,7 +208,8 @@ struct StrictDesk: View {
                         .minimumScaleFactor(0.7)
                 }
             }
-            HoldButton(title: "Hold to exit", action: exit)
+            SlideToLeave(title: "Slide to exit", icon: "rectangle.portrait.and.arrow.right", action: exit)
+                .frame(width: 210)
         }
     }
 }

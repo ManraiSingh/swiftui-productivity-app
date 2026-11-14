@@ -23,9 +23,9 @@ struct VillageSceneView: View {
                 ZStack(alignment: .topLeading) {
                 // The whole world, woods and town, drawn into one small bitmap each frame and shown
                 // as a single picture: far lighter for the phone than thousands of separate shapes.
-                let woods = WildsCache.shared.image(for: state)
-                let base = TownBaseCache.shared.image(for: state)
                 PixelCanvas(cols: VillageLayout.worldWidth, rows: VillageLayout.worldHeight, s: s, k: 2, frame: t) { p in
+                    let woods = WildsCache.shared.image(for: state)
+                    let base = TownBaseCache.shared.image(for: state)
                     if let woods { p.picture(woods, x: 0, y: 0, w: VillageLayout.worldWidth, h: VillageLayout.worldHeight) }
                     if state.phase == .night { VillageRenderer.wildsLive(p, t: t, state: state) }
                     let m = VillageLayout.margin, top = VillageLayout.topMargin
@@ -35,6 +35,11 @@ struct VillageSceneView: View {
                         if let base { town.picture(base, x: 0, y: 0, w: VillageLayout.width, h: VillageLayout.height) }
                         VillageRenderer.drawLive(town, t: t, state: state, effects: live)
                     }
+                    // Weather over the whole world, woods included, so it never stops at the town's edge.
+                    if state.weather == .rain {
+                        p.rect(0, 0, VillageLayout.worldWidth, VillageLayout.worldHeight, Color(hex: 0x4A5A78).opacity(0.16))
+                    }
+                    VillageRenderer.weatherParticles(p, t: t, width: VillageLayout.worldWidth, height: VillageLayout.worldHeight)
                 }
                 .frame(width: geo.size.width, height: CGFloat(VillageLayout.worldHeight) * s)
                 .allowsHitTesting(false)
@@ -58,6 +63,9 @@ struct VillageSceneView: View {
                     hotspot(x: 196, y: 210, w: 40, h: 34, s: s, label: "Go to the Together House", action: onStudyHall)
                     hotspot(x: 161, y: 185, w: 16, h: 18, s: s, label: "Read the notice board: town meeting", action: onTownHall)
 
+                    let lumi = VillageLayout.lumiPose(t: t, state: state)
+                    hotspot(x: lumi.x, y: lumi.y - 8, w: 20, h: 22, s: s, label: "Talk to Lumi at the Together House", action: onStudyHall)
+
                     ForEach(VillagerID.allCases) { villager in
                         let pose = VillageLayout.pose(villager, t: t, state: state)
                         hotspot(x: pose.x, y: pose.y - 8, w: 20, h: 22, s: s, label: "Talk to \(villager.name)", sound: nil) {
@@ -77,9 +85,11 @@ struct VillageSceneView: View {
                     }
 
 if !state.touring {
-                    let speaker = VillagerID.allCases[Int(t / 5) % VillagerID.allCases.count]
-                    let pose = VillageLayout.pose(speaker, t: t, state: state)
-                    SpeechBubble(text: Chatter.line(for: speaker, store, t: t))
+                    // Six speakers take turns: the five villagers and Lumi.
+                    let turn = Int(t / 5) % (VillagerID.allCases.count + 1)
+                    let speaker: VillagerID? = turn < VillagerID.allCases.count ? VillagerID.allCases[turn] : nil
+                    let pose = speaker.map { VillageLayout.pose($0, t: t, state: state) } ?? VillageLayout.lumiPose(t: t, state: state)
+                    SpeechBubble(text: speaker.map { Chatter.line(for: $0, store, t: t) } ?? Chatter.lumiLine(t: t))
                         .fixedSize()
                         .position(
                             x: min(max(pose.x * s, 85), townW - 85),

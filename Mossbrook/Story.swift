@@ -194,6 +194,17 @@ enum Chatter {
         }
     }
 
+    /// Lumi always knows when the next shared session starts.
+    static func lumiLine(t: Double) -> String {
+        let now = Date()
+        let slot = TogetherSchedule.slot(at: now)
+        let lines = slot.focusing(at: now)
+            ? ["Shh, a session is on!", "Everyone's focusing inside.", "Join us, there's a desk free!"]
+            : ["Next session at \(TogetherSchedule.label(TogetherSchedule.upcoming(after: now).start))!",
+               "Focus together? Come in!", "Snacks inside, friends too."]
+        return lines[Int(t / 30) % lines.count]
+    }
+
     static func line(for villager: VillagerID, _ store: VillageStore, t: Double) -> String {
         let all = lines(for: villager, store)
         return all[Int(t / 5) % all.count]
